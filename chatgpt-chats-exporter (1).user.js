@@ -1,0 +1,1051 @@
+// ==UserScript==
+// @name         ChatGPT Chats Exporter — Text-to-HTML MVP
+// @namespace    local.chatgpt-chats-exporter
+// @version      0.2.0
+// @description  Export the currently open ChatGPT conversation to self-contained HTML.
+// @match        https://chatgpt.com/*
+// @match        https://chat.openai.com/*
+// @run-at       document-idle
+// @grant        none
+// ==/UserScript==
+
+(() => {
+'use strict';
+const ROLE_LABELS = {
+  user: 'You',
+  assistant: 'ChatGPT',
+  system: 'System',
+  tool: 'Tool',
+};
+
+class ConversationShapeError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.name = 'ConversationShapeError';
+    this.details = details;
+  }
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value).replaceAll('`', '&#96;');
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function asNonEmptyString(value) {
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function roleForMessage(message) {
+  const role = message?.author?.role ?? message?.role ?? 'unknown';
+  return typeof role === 'string' ? role.toLowerCase() : 'unknown';
+}
+
+function labelForRole(role) {
+  return ROLE_LABELS[role] ?? (role ? role[0].toUpperCase() + role.slice(1) : 'Unknown');
+}
+
+function contentCandidates(message) {
+  const content = message?.content;
+  if (typeof content === 'string') return [{ kind: 'text', value: content }];
+  if (!isPlainObject(content)) return [];
+
+  const candidates = [];
+  const parts = Array.isArray(content.parts) ? content.parts : null;
+  if (parts) {
+    for (const part of parts) candidates.push({ kind: 'part', value: part });
+  }
+
+  if (typeof content.text === 'string') candidates.push({ kind: 'text', value: content.text });
+  if (typeof content.content === 'string') candidates.push({ kind: 'text', value: content.content });
+  if (Array.isArray(content.content)) {
+    for (const part of content.content) candidates.push({ kind: 'part', value: part });
+  }
+  return candidates;
+}
+
+function normalizePart(candidate, depth = 0) {
+  const { value } = candidate;
+  if (depth > 16) return { kind: 'omitted', reason: 'nested content depth exceeded' };
+  if (typeof value === 'string') return { kind: 'text', text: value };
+  if (!isPlainObject(value)) return { kind: 'omitted', reason: 'non-text content part' };
+
+  const type = String(value.content_type ?? value.type ?? value.kind ?? '').toLowerCase();
+  const directText = [value.text, value.value, value.content].find((item) => typeof item === 'string');
+  if (directText !== undefined && (type === '' || type.includes('text') || type.includes('code') || type.includes('output'))) {
+    return { kind: type.includes('code') ? 'code' : 'text', text: directText, language: value.language ?? value.lang ?? '' };
+  }
+  if (Array.isArray(value.parts)) {
+    const nested = value.parts.map((part) => normalizePart({ kind: 'part', value: part }, depth + 1));
+    return { kind: 'nested', parts: nested };
+  }
+  return { kind: 'omitted', reason: type || 'non-text content part' };
+}
+
+function flattenPart(part, output) {
+  if (part.kind === 'nested') {
+    for (const nested of part.parts) flattenPart(nested, output);
+    return;
+  }
+  output.push(part);
+}
+
+function extractTextBlocks(message) {
+  const normalized = [];
+  const candidates = contentCandidates(message);
+  for (const candidate of candidates) flattenPart(normalizePart(candidate), normalized);
+
+  const blocks = [];
+  let omittedCount = 0;
+  for (const item of normalized) {
+    if (item.kind === 'omitted') {
+      omittedCount += 1;
+      blocks.push({ type: 'omitted', reason: item.reason });
+      continue;
+    }
+    const text = String(item.text ?? '');
+    if (!text && blocks.length === 0) continue;
+    blocks.push({ type: item.kind === 'code' ? 'code' : 'text', text, language: item.language || '' });
+  }
+
+  if (blocks.length === 0 && candidates.length > 0) {
+    return { blocks: [{ type: 'omitted', reason: 'no supported text representation' }], omittedCount: 1 };
+  }
+  return { blocks, omittedCount };
+}
+
+function mappingEntries(raw) {
+  if (!isPlainObject(raw?.mapping)) return [];
+  return Object.entries(raw.mapping).map(([id, node]) => ({ id, ...(isPlainObject(node) ? node : {}) }));
+}
+
+function chooseLeaf(entries, currentNode) {
+  if (currentNode && entries.some((entry) => entry.id === currentNode)) return currentNode;
+  const withMessages = entries.filter((entry) => entry.message);
+  const childIds = new Set(entries.flatMap((entry) => Array.isArray(entry.children) ? entry.children : []));
+  const leaves = withMessages.filter((entry) => !childIds.has(entry.id));
+  return (leaves.at(-1) ?? withMessages.at(-1))?.id ?? null;
+}
+
+function pathFromMapping(entries, leafId) {
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const path = [];
+  const seen = new Set();
+  let cursor = leafId;
+  while (cursor && !seen.has(cursor)) {
+    seen.add(cursor);
+    const node = byId.get(cursor);
+    if (!node) throw new ConversationShapeError('The conversation tree references a missing parent node.', { missingNodeId: cursor });
+    path.push(node);
+    cursor = node.parent ?? null;
+  }
+  return path.reverse();
+}
+
+function arrayMessages(raw) {
+  if (Array.isArray(raw?.messages)) return raw.messages.map((message, index) => ({ id: message?.id ?? `message-${index + 1}`, message }));
+  if (Array.isArray(raw?.data?.messages)) return raw.data.messages.map((message, index) => ({ id: message?.id ?? `message-${index + 1}`, message }));
+  return [];
+}
+
+function normalizeNode(node, index) {
+  if (Object.prototype.hasOwnProperty.call(node, 'message') && !node.message) return null;
+  const message = node.message ?? node;
+  if (!isPlainObject(message)) return null;
+  const role = roleForMessage(message);
+  const extracted = extractTextBlocks(message);
+  return {
+    id: String(node.id ?? message.id ?? `message-${index + 1}`),
+    role,
+    authorLabel: labelForRole(role),
+    createdAt: message.create_time ?? message.createdAt ?? message.created_at ?? null,
+    parentId: node.parent ?? message.parent ?? null,
+    textBlocks: extracted.blocks,
+    omittedCount: extracted.omittedCount,
+  };
+}
+
+function normalizeConversation(raw) {
+  if (!isPlainObject(raw)) throw new ConversationShapeError('Conversation response was not a JSON object.');
+
+  const title = asNonEmptyString(raw.title) ?? asNonEmptyString(raw.name) ?? 'ChatGPT conversation';
+  const conversationId = asNonEmptyString(raw.conversation_id) ?? asNonEmptyString(raw.conversationId) ?? null;
+  let nodes;
+  let sourceShape;
+  let activeBranch = true;
+
+  const entries = mappingEntries(raw);
+  if (entries.length > 0) {
+    const leafId = chooseLeaf(entries, raw.current_node ?? raw.currentNode);
+    if (!leafId) throw new ConversationShapeError('Conversation mapping contains no usable message node.', { keys: Object.keys(raw) });
+    nodes = pathFromMapping(entries, leafId);
+    sourceShape = 'mapping-tree';
+  } else {
+    nodes = arrayMessages(raw);
+    sourceShape = 'message-array';
+    activeBranch = false;
+  }
+
+  const messages = nodes.map(normalizeNode).filter(Boolean);
+  if (messages.length === 0) throw new ConversationShapeError('No message nodes with recognizable content were found.', { sourceShape, keys: Object.keys(raw) });
+
+  const uniqueMessages = [];
+  const seen = new Set();
+  for (const message of messages) {
+    if (seen.has(message.id)) continue;
+    seen.add(message.id);
+    uniqueMessages.push(message);
+  }
+
+  const omittedBlockCount = uniqueMessages.reduce((sum, message) => sum + message.omittedCount, 0);
+  return {
+    title,
+    conversationId,
+    sourceShape,
+    activeBranch,
+    messages: uniqueMessages,
+    stats: {
+      messageCount: uniqueMessages.length,
+      omittedBlockCount,
+      sourceNodeCount: nodes.length,
+    },
+  };
+}
+
+function inlineFormatting(escapedText) {
+  return escapedText
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_\n]+)__/g, '<strong>$1</strong>')
+    .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
+    .replace(/_([^_\n]+)_/g, '<em>$1</em>');
+}
+
+function textToBlocks(text) {
+  const lines = String(text ?? '').replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
+  const blocks = [];
+  let paragraph = [];
+  let code = null;
+
+  const flushParagraph = () => {
+    if (paragraph.length === 0) return;
+    blocks.push({ type: 'paragraph', html: paragraph.map((line) => inlineFormatting(escapeHtml(line))).join('<br>') });
+    paragraph = [];
+  };
+
+  for (const line of lines) {
+    const fence = line.match(/^\s*```\s*([^\s`]*)\s*$/);
+    if (fence) {
+      if (code) {
+        blocks.push({ type: 'code', language: code.language, html: escapeHtml(code.lines.join('\n')) });
+        code = null;
+      } else {
+        flushParagraph();
+        code = { language: fence[1] || '', lines: [] };
+      }
+      continue;
+    }
+    if (code) {
+      code.lines.push(line);
+    } else if (/^\s*$/.test(line)) {
+      flushParagraph();
+    } else {
+      paragraph.push(line);
+    }
+  }
+
+  if (code) blocks.push({ type: 'code', language: code.language, html: escapeHtml(code.lines.join('\n')) });
+  flushParagraph();
+  if (blocks.length === 0) blocks.push({ type: 'paragraph', html: '' });
+  return blocks;
+}
+
+function renderBlock(block) {
+  if (block.type === 'omitted') return `<p class="omitted">[non-text content omitted: ${escapeHtml(block.reason)}]</p>`;
+  if (block.type === 'code') {
+    const language = block.language ? ` data-language="${escapeAttribute(block.language)}"` : '';
+    return `<pre class="code-block"${language}><code>${escapeHtml(block.text ?? '')}</code></pre>`;
+  }
+  return textToBlocks(block.text ?? '').map((part) => {
+    if (part.type === 'code') {
+      const language = part.language ? ` data-language="${escapeAttribute(part.language)}"` : '';
+      return `<pre class="code-block"${language}><code>${part.html}</code></pre>`;
+    }
+    return `<p>${part.html}</p>`;
+  }).join('');
+}
+
+function formatTimestamp(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const date = new Date(typeof value === 'number' && value < 10_000_000_000 ? value * 1000 : value);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+}
+
+function messagePlainText(message) {
+  return (message.textBlocks ?? []).filter((block) => block.type === 'text' || block.type === 'code').map((block) => block.text ?? '').join('\n');
+}
+
+function roleCounts(messages) {
+  const counts = new Map();
+  for (const message of messages) counts.set(message.role, (counts.get(message.role) ?? 0) + 1);
+  return [...counts.entries()].map(([role, count]) => `${count} ${ROLE_LABELS[role] ?? role}`).join(', ');
+}
+
+function railLabel(text) {
+  const flat = String(text ?? '').replace(/```[\s\S]*?```/g, ' ').replace(/\s+/g, ' ').trim();
+  return flat.length > 72 ? `${flat.slice(0, 71)}…` : (flat || 'Untitled prompt');
+}
+
+const EXPORT_CSS = `
+:root { color-scheme: light; --bg: #f9f9f9; --surface: #fff; --text: #24292f; --muted: #57606a; --border: #e0e0e0; --user: #eef2ff; --assistant: #fff; --accent: #10a37f; --link: #0969da; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 24px 16px 64px; background: var(--bg); color: var(--text); font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+.wrap { max-width: 820px; margin: 0 auto; }
+header.export-head { margin-bottom: 24px; }
+.export-head h1 { font-size: 1.5em; margin: 0 0 6px; word-wrap: break-word; }
+.meta { color: var(--muted); font-size: .85em; margin: 0 0 4px; }
+.meta a { color: var(--link); }
+.flag-ok { color: #1a7f37; font-weight: 600; }
+.flag-warn { color: #9a6700; font-weight: 600; }
+.warn-box { border: 1px solid #d4a72c; background: #fff8c5; color: #633c01; border-radius: 6px; padding: 10px 14px; margin: 12px 0; font-size: .9em; }
+.message { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 15px 18px; margin-bottom: 20px; position: relative; box-shadow: 0 2px 4px rgb(0 0 0 / .05); scroll-margin-top: 16px; }
+.message.user { background: var(--user); border-color: #d1d8ff; }
+.message:target { outline: 2px solid var(--accent); outline-offset: 2px; }
+.message h2 { margin: 0; font-size: .95em; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+.msg-time { font-weight: 400; letter-spacing: 0; color: #8b949e; margin-left: 8px; font-size: .92em; }
+.content { overflow-wrap: anywhere; margin-top: 10px; }
+.content a { color: var(--link); }
+.content p { margin: 0 0 12px; }
+.content p:last-child { margin-bottom: 0; }
+.content code { background: rgb(175 184 193 / .2); padding: .15em .35em; border-radius: 4px; font-size: .9em; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.content pre { white-space: pre; overflow-x: auto; background: #1f2328; color: #e6edf3; padding: 12px 14px; border-radius: 6px; margin: 12px 0; }
+.content pre code { background: none; padding: 0; color: inherit; font-size: .88em; }
+.omitted, .empty-message { color: var(--muted); font-style: italic; }
+.export-footer { margin-top: 28px; color: var(--muted); font-size: .82rem; }
+.copy-btn { position: absolute; top: 12px; right: 12px; padding: 4px 10px; background: var(--accent); color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.copy-btn:hover { background: #0d8a6a; }
+#rail { max-width: 900px; margin: 0 auto 24px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+#rail h2 { margin: 0 0 8px; color: var(--muted); font-size: .9rem; }
+#rail ol { margin: 0; padding-left: 1.4em; font-size: .9rem; }
+#rail li { margin: 2px 0; }
+#rail a { color: var(--accent); text-decoration: none; }
+#rail a:hover { text-decoration: underline; }
+#rail-toggle { display: none; }
+#rail-tip { position: fixed; z-index: 60; transform: translateY(-50%); max-width: 44vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: #1f2328; color: #fff; font-size: 12px; padding: 4px 9px; border-radius: 4px; pointer-events: none; opacity: 0; transition: opacity .12s ease; }
+#rail-tip.on { opacity: 1; }
+html.js #rail { position: fixed; top: 0; right: 0; bottom: 0; width: 40px; max-width: none; margin: 0; padding: 0; background: none; border: 0; border-radius: 0; z-index: 50; display: flex; flex-direction: column; justify-content: center; align-items: flex-end; pointer-events: none; }
+html.js #rail ol { pointer-events: auto; list-style: none; padding: 8px 0; margin: 0; max-height: 100vh; overflow-y: auto; overflow-x: visible; scrollbar-width: none; }
+html.js #rail ol::-webkit-scrollbar { display: none; }
+html.js #rail h2 { display: none; }
+html.js #rail li { margin: 0; }
+html.js #rail a { display: block; position: relative; padding: 3px 14px 3px 8px; }
+html.js #rail a::before { content: ""; display: block; height: 2px; width: 10px; margin-left: auto; background: #b9bec4; border-radius: 1px; transition: width .12s ease, background .12s ease; }
+html.js #rail a:hover::before, html.js #rail a:focus-visible::before { width: 20px; background: #6e7781; }
+html.js #rail li.active a::before { width: 22px; background: var(--accent); }
+html.js #rail a span { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+html.js #rail.hidden ol { display: none; }
+html.js #rail-toggle { display: block; position: fixed; top: 12px; right: 10px; padding: 3px 8px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); border-radius: 4px; cursor: pointer; z-index: 51; }
+html.js .wrap { padding-right: 44px; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+@media (max-width: 700px) { html.js #rail { display: none; } html.js .wrap { padding-right: 0; } }
+`;
+
+const EXPORT_JS = [
+  '(function () {',
+  '  var root = document.documentElement;',
+  "  root.className = root.className ? root.className + ' js' : 'js';",
+  '  function copy(text, btn) {',
+  '    var done = function () { btn.textContent = "Copied"; setTimeout(function () { btn.textContent = "Copy"; }, 1600); };',
+  '    var fail = function () { btn.textContent = "Copy failed"; setTimeout(function () { btn.textContent = "Copy"; }, 1600); };',
+  '    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { legacy(text) ? done() : fail(); });',
+  '    else legacy(text) ? done() : fail();',
+  '  }',
+  '  function legacy(text) { try { var ta = document.createElement("textarea"); ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.top = "-1000px"; document.body.appendChild(ta); ta.select(); var ok = document.execCommand("copy"); ta.remove(); return ok; } catch (e) { return false; } }',
+  '  document.addEventListener("click", function (event) {',
+  '    var button = event.target.closest ? event.target.closest(".copy-btn") : null;',
+  '    if (button) { var body = button.parentNode.querySelector(".content"); if (body) copy(body.innerText, button); return; }',
+  '  });',
+  '  var rail = document.getElementById("rail"), toggle = document.getElementById("rail-toggle");',
+  '  if (!rail) return;',
+  '  function setHidden(hidden) { rail.className = hidden ? "hidden" : ""; if (toggle) { toggle.textContent = hidden ? "Nav" : "Hide"; toggle.setAttribute("aria-expanded", hidden ? "false" : "true"); } try { sessionStorage.setItem("chatgpt-chats-exporter-rail-hidden", hidden ? "1" : "0"); } catch (e) {} }',
+  '  var stored = "0"; try { stored = sessionStorage.getItem("chatgpt-chats-exporter-rail-hidden") || "0"; } catch (e) {} setHidden(stored === "1");',
+  '  if (toggle) toggle.addEventListener("click", function () { setHidden(rail.className !== "hidden"); });',
+  '  var links = rail.querySelectorAll("ol a[href^=\"#\"]"), items = [], tip = document.createElement("div");',
+  '  tip.id = "rail-tip"; document.body.appendChild(tip);',
+  '  for (var i = 0; i < links.length; i++) { var target = document.getElementById(links[i].getAttribute("href").slice(1)); if (target) items.push({ a: links[i], li: links[i].parentNode, el: target }); }',
+  '  if (!items.length) return;',
+  '  function showTip(a) { var r = a.getBoundingClientRect(); tip.textContent = a.textContent; tip.style.top = (r.top + r.height / 2) + "px"; tip.style.right = (window.innerWidth - r.left + 8) + "px"; tip.className = "on"; }',
+  '  function hideTip() { tip.className = ""; }',
+  '  var list = rail.querySelector("ol"), current = -1, visible = Object.create(null);',
+  '  list.addEventListener("mouseover", function (e) { var a = e.target.closest ? e.target.closest("a") : null; if (a && list.contains(a)) showTip(a); });',
+  '  list.addEventListener("mouseleave", hideTip); list.addEventListener("focusin", function (e) { if (e.target.tagName === "A") showTip(e.target); }); list.addEventListener("focusout", hideTip);',
+  '  function paint(i) { if (i < 0 || i === current) return; if (current >= 0) items[current].li.className = ""; items[i].li.className = "active"; current = i; }',
+  '  function recompute() { for (var i = 0; i < items.length; i++) if (visible[items[i].el.id]) { paint(i); return; } }',
+  '  if (window.IntersectionObserver) { var io = new IntersectionObserver(function (entries) { for (var k = 0; k < entries.length; k++) { var e = entries[k]; if (e.isIntersecting) visible[e.target.id] = 1; else delete visible[e.target.id]; } recompute(); }, { rootMargin: "-8% 0px -55% 0px", threshold: 0 }); for (var j = 0; j < items.length; j++) io.observe(items[j].el); }',
+  '  paint(0);',
+  '  function go(delta) { var next = current < 0 ? 0 : current + delta; if (next < 0) next = 0; if (next > items.length - 1) next = items.length - 1; items[next].el.scrollIntoView({ behavior: "smooth", block: "start" }); paint(next); }',
+  '  document.addEventListener("keydown", function (e) { var t = e.target; if (e.ctrlKey || e.metaKey || (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))) return; if (e.key === "j" || e.key === "n" || (e.altKey && e.key === "ArrowDown")) { e.preventDefault(); go(1); } else if (e.key === "k" || e.key === "p" || (e.altKey && e.key === "ArrowUp")) { e.preventDefault(); go(-1); } });',
+  '})();',
+].join('\n');
+
+function renderConversationHtml(conversation, { exportedAt = new Date().toISOString(), sourceUrl = null, includeConversationId = false, includeTitle = true } = {}) {
+  const railItems = [];
+  const messagesHtml = conversation.messages.map((message, index) => {
+    const id = `m-${String(index + 1).padStart(4, '0')}`;
+    const timestamp = formatTimestamp(message.createdAt);
+    const blocks = message.textBlocks.map(renderBlock).join('') || '<p class="empty-message">[empty message]</p>';
+    const copyButton = '<button class="copy-btn" type="button">Copy</button>';
+    if (message.role === 'user') {
+      railItems.push(`<li><a href="#${id}"><span>${escapeHtml(railLabel(messagePlainText(message)))}</span></a></li>`);
+    }
+    return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}" id="${id}" data-message-index="${index + 1}" data-message-id="${escapeAttribute(message.id)}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${timestamp ? `<span class="msg-time"><time datetime="${escapeAttribute(String(message.createdAt))}">${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
+  }).join('\n');
+
+  const branchNote = conversation.activeBranch ? 'Active conversation branch exported.' : 'Message-array conversation exported.';
+  const rawTitle = includeTitle ? conversation.title : 'ChatGPT conversation';
+  const title = escapeHtml(rawTitle);
+  const idMeta = includeConversationId && conversation.conversationId ? `<meta name="conversation-id" content="${escapeAttribute(conversation.conversationId)}">` : '';
+  const sourceBlock = sourceUrl ? `<p class="meta">Source: <a href="${escapeAttribute(sourceUrl)}" rel="noopener noreferrer">${escapeHtml(sourceUrl)}</a></p>` : '';
+  const metadata = `<p class="meta">Exported ${escapeHtml(exportedAt)} · ${conversation.stats.messageCount} message${conversation.stats.messageCount === 1 ? '' : 's'} (${escapeHtml(roleCounts(conversation.messages))})</p>`;
+  const omissionLine = conversation.stats.omittedBlockCount > 0
+    ? `<p class="meta flag-warn">${conversation.stats.omittedBlockCount} omitted non-text block${conversation.stats.omittedBlockCount === 1 ? '' : 's'}</p>`
+    : '<p class="meta flag-ok">Text blocks complete</p>';
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="chatgpt-chats-exporter 0.2.0">
+<meta name="exported-at" content="${escapeAttribute(exportedAt)}">
+${idMeta}
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'">
+<title>${title}</title>
+<style>${EXPORT_CSS}</style>
+</head>
+<body>
+<button id="rail-toggle" type="button" aria-controls="rail" aria-expanded="true">Hide</button>
+<nav id="rail" aria-label="Prompts"><h2>Prompts</h2><ol>${railItems.join('')}</ol></nav>
+<div class="wrap">
+<header class="export-head">
+<h1>${title}</h1>
+${metadata}
+${sourceBlock}
+${omissionLine}
+</header>
+<main>
+<section aria-label="Conversation messages">
+${messagesHtml}
+</section>
+<footer class="export-footer">${escapeHtml(branchNote)} Generated locally by chatgpt-chats-exporter 0.2.0. This file was generated locally and is designed to work offline.</footer>
+</main>
+</div>
+<script>${EXPORT_JS}</script>
+</body>
+</html>`;
+}
+
+function sanitizeFilename(value, fallback = 'chatgpt-conversation') {
+  const cleaned = String(value ?? '')
+    .normalize('NFKC')
+    .replace(/[\\/:*?"<>|\u0000-\u001F\u202A-\u202E\u2066-\u2069]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/g, '')
+    .slice(0, 120);
+  return cleaned || fallback;
+}
+
+const DEFAULT_TIMEOUT_MS = 20_000;
+const TOKEN_TTL_MS = 60_000;
+const CONVERSATION_PATH_RE = /^\/backend-api\/conversation\/[A-Za-z0-9_-]{1,100}(?:\?[A-Za-z0-9_=&-]{0,200})?$/;
+let cachedAccessToken = null;
+let tokenFetchedAt = 0;
+let authInvalidationInstalled = false;
+
+class ChatGPTClientError extends Error {
+  constructor(code, message, details = {}) {
+    super(message);
+    this.name = 'ChatGPTClientError';
+    this.code = code;
+    this.details = details;
+  }
+}
+
+function currentOrigin() {
+  return globalThis.location?.origin ?? 'https://chatgpt.com';
+}
+
+function parseConversationRoute(url = globalThis.location?.href ?? '') {
+  try {
+    const parsed = new URL(url);
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    const routeIndex = parts.findIndex((part) => part === 'c' || part === 'conversation');
+    if (routeIndex >= 0) {
+      const rawId = parts[routeIndex + 1];
+      if (!rawId) return { kind: 'missing-id', conversationId: null, pathname: parsed.pathname, reason: 'conversation route has no ID' };
+      return {
+        kind: 'conversation',
+        conversationId: decodeURIComponent(rawId),
+        pathname: parsed.pathname,
+        routeSegment: parts[routeIndex],
+      };
+    }
+    if (parts[0] === 'share') return { kind: 'share', conversationId: null, pathname: parsed.pathname, reason: 'share links are not owned conversation routes' };
+    return { kind: 'not-conversation', conversationId: null, pathname: parsed.pathname, reason: 'no supported conversation route segment' };
+  } catch {
+    return { kind: 'invalid-url', conversationId: null, pathname: '', reason: 'invalid URL' };
+  }
+}
+
+function getConversationIdFromUrl(url = globalThis.location?.href ?? '') {
+  const route = parseConversationRoute(url);
+  return route.kind === 'conversation' ? route.conversationId : null;
+}
+
+function isChatGPTHost(locationLike = globalThis.location) {
+  const host = locationLike?.hostname ?? '';
+  return host === 'chatgpt.com' || host === 'chat.openai.com';
+}
+
+function redactId(id) {
+  const value = String(id ?? '');
+  if (!value) return '<missing>';
+  return `<id:${value.length}>`;
+}
+
+function redactUrl(url, conversationId = '') {
+  try {
+    const parsed = new URL(url, currentOrigin());
+    if (parsed.origin !== currentOrigin()) return '<unrecognized-path>';
+    const path = `${parsed.pathname}${parsed.search}`;
+    if (!CONVERSATION_PATH_RE.test(path)) return '<unrecognized-path>';
+    const segments = parsed.pathname.split('/');
+    const id = String(conversationId ?? '');
+    if (id && segments[3] === id) segments[3] = redactId(id);
+    else if (segments[3]) segments[3] = '<id>';
+    return `${segments.join('/')}${parsed.search ? '?…' : ''}`;
+  } catch {
+    return '<unrecognized-path>';
+  }
+}
+
+function clearAccessTokenCache() {
+  cachedAccessToken = null;
+  tokenFetchedAt = 0;
+}
+
+function installAuthCacheInvalidation() {
+  if (authInvalidationInstalled) return;
+  authInvalidationInstalled = true;
+  globalThis.document?.addEventListener?.('visibilitychange', () => {
+    if (globalThis.document.hidden) clearAccessTokenCache();
+  });
+  globalThis.addEventListener?.('popstate', clearAccessTokenCache);
+  const history = globalThis.history;
+  if (!history) return;
+  for (const method of ['pushState', 'replaceState']) {
+    const original = history[method];
+    if (typeof original !== 'function') continue;
+    history[method] = function (...args) {
+      const result = original.apply(this, args);
+      clearAccessTokenCache();
+      return result;
+    };
+  }
+}
+
+function getResourceHints(conversationId = '') {
+  try {
+    const entries = globalThis.performance?.getEntriesByType?.('resource') ?? [];
+    const seen = new Set();
+    const hints = [];
+    for (const entry of entries) {
+      const name = String(entry?.name ?? '');
+      let parsed;
+      try {
+        parsed = new URL(name, currentOrigin());
+      } catch {
+        continue;
+      }
+      if (parsed.origin !== currentOrigin()) continue;
+      if (!name || (!name.includes('/backend-api/') && !name.includes('/conversation/'))) continue;
+      const redacted = redactUrl(name, conversationId);
+      if (seen.has(redacted)) continue;
+      seen.add(redacted);
+      hints.push(redacted);
+    }
+    return hints.slice(-12);
+  } catch {
+    return [];
+  }
+}
+
+function endpointCandidates(conversationId, resourceHints = getResourceHints(conversationId)) {
+  const id = encodeURIComponent(conversationId);
+  const known = [
+    `/backend-api/conversation/${id}`,
+    `/backend-api/conversation/${id}?history_and_training_disabled=false`,
+  ];
+  const resourceDerived = [];
+  for (const hint of resourceHints) {
+    try {
+      const parsed = new URL(hint.replace('?…', ''), currentOrigin());
+      if (parsed.origin !== currentOrigin()) continue;
+      const pathname = parsed.pathname;
+      if (!pathname.includes('/backend-api/') || !pathname.includes('/conversation/')) continue;
+      const originalEntries = globalThis.performance?.getEntriesByType?.('resource') ?? [];
+      const matching = originalEntries.find((entry) => redactUrl(entry?.name ?? '', conversationId) === hint);
+      if (matching?.name) {
+        const original = new URL(matching.name, currentOrigin());
+        if (original.origin !== currentOrigin()) continue;
+        const path = `${original.pathname}${original.search}`;
+        if (CONVERSATION_PATH_RE.test(path) && !resourceDerived.includes(path)) resourceDerived.push(path);
+      }
+    } catch {
+      // Ignore resource entries that are not valid URL candidates.
+    }
+  }
+  return [...new Set([...resourceDerived, ...known])].filter((path) => CONVERSATION_PATH_RE.test(path)).slice(0, 4);
+}
+
+function getCookie(name) {
+  try {
+    const cookies = String(globalThis.document?.cookie ?? '').split(';');
+    const prefix = `${name}=`;
+    const found = cookies.find((cookie) => cookie.trim().startsWith(prefix));
+    return found ? decodeURIComponent(found.trim().slice(prefix.length)) : null;
+  } catch {
+    return null;
+  }
+}
+
+function findAccountIdInValue(value) {
+  if (typeof value !== 'string') return null;
+  const bounded = value.slice(0, 262_144);
+  const workspace = bounded.match(/\bws-[a-f0-9]{8}-[a-f0-9-]{27,}\b/i)?.[0];
+  if (workspace) return workspace;
+  const accountKey = bounded.match(/\b(?:account|workspace)[-_]?(?:id)?["'=:\s]+([a-f0-9]{8}-[a-f0-9-]{27,})\b/i)?.[1];
+  return accountKey ?? null;
+}
+
+function discoverAccountId() {
+  const candidates = new Set();
+  const add = (value) => { const found = findAccountIdInValue(value); if (found) candidates.add(found); };
+  try {
+    add(globalThis.document?.getElementById?.('__NEXT_DATA__')?.textContent);
+  } catch {
+    // Continue with storage and page globals.
+  }
+  try {
+    const storage = globalThis.localStorage;
+    const knownKeys = new Set(['chatgpt-account-id', 'chatgpt-account_id', 'chatgpt-workspace-id', 'chatgpt-workspace_id', 'oai-account-id', 'oai-workspace-id', 'account_id', 'workspace_id']);
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index) ?? '';
+      if (knownKeys.has(key.toLowerCase())) add(storage.getItem(key));
+    }
+  } catch {
+    // Storage may be unavailable in a restricted execution context.
+  }
+  try {
+    const globals = [globalThis.__NEXT_DATA__, globalThis.__INITIAL_STATE__, globalThis.__PRELOADED_STATE__];
+    for (const value of globals) add(JSON.stringify(value).slice(0, 262_144));
+  } catch {
+    // Ignore inaccessible page state.
+  }
+  return candidates.size === 1 ? candidates.values().next().value : null;
+}
+
+async function getAccessToken(fetchImpl) {
+  if (cachedAccessToken && cachedAccessToken !== 'dummy' && Date.now() - tokenFetchedAt < TOKEN_TTL_MS) return cachedAccessToken;
+  clearAccessTokenCache();
+  const sessionUrl = new URL('/api/auth/session?unstable_client=true', currentOrigin()).toString();
+  let response;
+  try {
+    response = await fetchWithTimeout(fetchImpl, sessionUrl, {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    }, DEFAULT_TIMEOUT_MS);
+  } catch {
+    return null;
+  }
+  if (!response.ok) return null;
+  try {
+    const session = await response.json();
+    const token = session?.accessToken ?? session?.access_token ?? session?.token ?? null;
+    if (typeof token === 'string' && token && token.toLowerCase() !== 'dummy') {
+      cachedAccessToken = token;
+      tokenFetchedAt = Date.now();
+      return token;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function getAuthContext(fetchImpl = globalThis.fetch) {
+  const accessToken = await getAccessToken(fetchImpl);
+  const deviceId = getCookie('oai-did') ?? getCookie('oai-device-id');
+  const accountId = discoverAccountId();
+  return {
+    hasAccessToken: Boolean(accessToken),
+    hasDeviceId: Boolean(deviceId),
+    hasAccountId: Boolean(accountId),
+    headers: {
+      Accept: 'application/json',
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      ...(deviceId ? { 'oai-device-id': deviceId } : {}),
+      ...(accountId ? { 'ChatGPT-Account-Id': accountId } : {}),
+    },
+  };
+}
+
+async function fetchWithTimeout(fetchImpl, url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new ChatGPTClientError('timeout', `ChatGPT did not respond within ${timeoutMs / 1000} seconds.`, { url });
+    }
+    throw new ChatGPTClientError('network', 'The browser could not reach ChatGPT.', { url, cause: error?.message });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function errorForStatus(status, url, details = {}) {
+  if (status === 401 || status === 403) return new ChatGPTClientError('auth', `ChatGPT rejected the conversation request (${status}). Sign in again, then retry.`, { status, url, ...details });
+  if (status === 404) return new ChatGPTClientError('not-found', 'The conversation request returned 404. The route ID or internal request path may have changed.', { status, url, ...details });
+  if (status === 429) return new ChatGPTClientError('rate-limit', 'ChatGPT is rate-limiting the request. Wait briefly and retry.', { status, url, ...details });
+  if (status >= 500) return new ChatGPTClientError('server', `ChatGPT returned a server error (${status}).`, { status, url, ...details });
+  return new ChatGPTClientError('http', `ChatGPT returned HTTP ${status}.`, { status, url, ...details });
+}
+
+async function fetchConversation(conversationId, { fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  if (!conversationId) throw new ChatGPTClientError('missing-id', 'No conversation ID was found in the current URL. Open a chat before exporting.');
+  if (typeof fetchImpl !== 'function') throw new ChatGPTClientError('no-fetch', 'This browser does not provide fetch().');
+
+  const route = parseConversationRoute(globalThis.location?.href ?? '');
+  const resourceHints = getResourceHints(conversationId);
+  const candidates = endpointCandidates(conversationId, resourceHints);
+  let auth = await getAuthContext(fetchImpl);
+  let lastError = null;
+  let authRefreshAttempted = false;
+  const attempted = [];
+
+  for (const path of candidates) {
+    const url = new URL(path, currentOrigin()).toString();
+    attempted.push(redactUrl(url, conversationId));
+    let response;
+    try {
+      response = await fetchWithTimeout(fetchImpl, url, {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: auth.headers,
+        cache: 'no-store',
+      }, timeoutMs);
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+
+    if ((response.status === 401 || response.status === 403) && !authRefreshAttempted) {
+      authRefreshAttempted = true;
+      clearAccessTokenCache();
+      auth = await getAuthContext(fetchImpl);
+      try {
+        response = await fetchWithTimeout(fetchImpl, url, {
+          method: 'GET',
+          credentials: 'same-origin',
+          headers: auth.headers,
+          cache: 'no-store',
+        }, timeoutMs);
+      } catch (error) {
+        lastError = error;
+        continue;
+      }
+    }
+
+    if (!response.ok) {
+      const error = errorForStatus(response.status, url, {
+        route,
+        parsedId: redactId(conversationId),
+        attempted,
+        resourceHints,
+        auth: { hasAccessToken: auth.hasAccessToken, hasDeviceId: auth.hasDeviceId, hasAccountId: auth.hasAccountId },
+      });
+      if (response.status === 404) {
+        lastError = error;
+        continue;
+      }
+      throw error;
+    }
+
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!contentType.includes('json')) {
+      throw new ChatGPTClientError('content-type', 'The conversation request did not return JSON.', { contentType, url: redactUrl(url, conversationId), route, attempted, resourceHints, auth: { hasAccessToken: auth.hasAccessToken, hasDeviceId: auth.hasDeviceId, hasAccountId: auth.hasAccountId } });
+    }
+    try {
+      return await response.json();
+    } catch (error) {
+      throw new ChatGPTClientError('invalid-json', 'ChatGPT returned malformed JSON.', { url: redactUrl(url, conversationId), route, attempted, resourceHints, auth: { hasAccessToken: auth.hasAccessToken, hasDeviceId: auth.hasDeviceId, hasAccountId: auth.hasAccountId }, cause: error?.message });
+    }
+  }
+
+  if (lastError instanceof ChatGPTClientError) {
+    lastError.details = { ...lastError.details, route, parsedId: redactId(conversationId), attempted, resourceHints, auth: { hasAccessToken: auth.hasAccessToken, hasDeviceId: auth.hasDeviceId, hasAccountId: auth.hasAccountId } };
+    throw lastError;
+  }
+  throw new ChatGPTClientError('unavailable', 'No conversation request endpoint succeeded.', { route, parsedId: redactId(conversationId), attempted, resourceHints, auth: { hasAccessToken: auth.hasAccessToken, hasDeviceId: auth.hasDeviceId, hasAccountId: auth.hasAccountId } });
+}
+
+function describeClientError(error) {
+  if (!(error instanceof ChatGPTClientError)) return error?.message ?? String(error);
+  const details = error.details ?? {};
+  const lines = [error.message];
+  if (details.route?.pathname) lines.push(`Page path: ${details.route.pathname}`);
+  if (details.parsedId) lines.push(`Parsed ID: ${details.parsedId}`);
+  if (details.auth) lines.push(`Auth context: token=${details.auth.hasAccessToken ? 'yes' : 'no'}, device=${details.auth.hasDeviceId ? 'yes' : 'no'}, account=${details.auth.hasAccountId ? 'yes' : 'no'}`);
+  if (Array.isArray(details.attempted) && details.attempted.length) lines.push(`Tried: ${details.attempted.join(' | ')}`);
+  if (Array.isArray(details.resourceHints) && details.resourceHints.length) lines.push(`Page request hints: ${details.resourceHints.join(' | ')}`);
+  if (error.code === 'not-found' && (!details.resourceHints || details.resourceHints.length === 0)) lines.push('Reload the conversation with DevTools Network open and retry; the current page request path may need to be added.');
+  return lines.join('\n');
+}
+
+(() => {
+  const CONTROL_ID = 'chatgpt-chats-exporter-control';
+  const PANEL_ID = 'chatgpt-chats-exporter-panel';
+  const OPTIONS_ID = 'chatgpt-chats-exporter-options';
+  const STYLE_ID = 'chatgpt-chats-exporter-style';
+  const PREF_KEY = 'chatgpt-chats-exporter-prefs';
+
+  function addStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+      #${CONTROL_ID} { position: fixed; right: 18px; bottom: 18px; z-index: 2147483647; border: 0; border-radius: 999px; padding: 10px 15px; background: #111827; color: white; box-shadow: 0 6px 22px rgb(0 0 0 / .2); font: 600 13px/1.2 system-ui, sans-serif; cursor: pointer; }
+      #${CONTROL_ID}:hover { background: #1f2937; }
+      #${CONTROL_ID}[data-state="busy"] { opacity: .7; cursor: wait; }
+      #${PANEL_ID} { position: fixed; right: 18px; bottom: 64px; z-index: 2147483647; max-width: min(420px, calc(100vw - 36px)); border: 1px solid rgb(156 163 175 / .45); border-radius: 12px; padding: 12px 14px; background: Canvas; color: CanvasText; box-shadow: 0 8px 30px rgb(0 0 0 / .2); font: 13px/1.45 system-ui, sans-serif; white-space: normal; }
+      #${PANEL_ID}[hidden] { display: none; }
+      #${PANEL_ID} strong { display: block; margin-bottom: 3px; }
+      #${PANEL_ID} code { font: 12px ui-monospace, monospace; overflow-wrap: anywhere; }
+      #${OPTIONS_ID} { position: fixed; inset: 0; z-index: 2147483646; display: grid; place-items: center; padding: 18px; background: rgb(0 0 0 / .45); font: 14px/1.45 system-ui, sans-serif; }
+      #${OPTIONS_ID}[hidden] { display: none; }
+      #${OPTIONS_ID} .cge-card { width: min(430px, 100%); padding: 22px; border: 1px solid rgb(156 163 175 / .45); border-radius: 14px; background: Canvas; color: CanvasText; box-shadow: 0 12px 42px rgb(0 0 0 / .25); }
+      #${OPTIONS_ID} h2 { margin: 0 0 8px; font-size: 18px; }
+      #${OPTIONS_ID} p { margin: 0 0 16px; color: GrayText; }
+      #${OPTIONS_ID} label { display: flex; gap: 9px; align-items: flex-start; margin: 10px 0; cursor: pointer; }
+      #${OPTIONS_ID} input { margin-top: 3px; }
+      #${OPTIONS_ID} .cge-actions { display: flex; gap: 9px; justify-content: flex-end; margin-top: 20px; }
+      #${OPTIONS_ID} button { border: 0; border-radius: 8px; padding: 9px 13px; cursor: pointer; font: inherit; }
+      #${OPTIONS_ID} .cge-primary { background: #111827; color: white; }
+      #${OPTIONS_ID} .cge-secondary { background: rgb(127 127 127 / .16); color: CanvasText; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function showStatus(title, detail = '', isError = false) {
+    let panel = document.getElementById(PANEL_ID);
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = PANEL_ID;
+      document.body.appendChild(panel);
+    }
+    panel.hidden = false;
+    panel.setAttribute('role', isError ? 'alert' : 'status');
+    panel.replaceChildren();
+    const heading = document.createElement('strong');
+    heading.textContent = title;
+    panel.appendChild(heading);
+    if (detail) {
+      const detailNode = document.createElement('span');
+      const lines = String(detail).split('\n');
+      lines.forEach((line, index) => {
+        if (index > 0) detailNode.appendChild(document.createElement('br'));
+        detailNode.appendChild(document.createTextNode(line));
+      });
+      panel.appendChild(detailNode);
+    }
+    if (!isError) window.setTimeout(() => { if (panel) panel.hidden = true; }, 6000);
+  }
+
+  function downloadHtml(html, fileName) {
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${fileName}.html`;
+    anchor.rel = 'noopener';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function defaultPrefs() {
+    return { url: true, title: true, conversationId: false };
+  }
+
+  function loadPrefs() {
+    const prefs = defaultPrefs();
+    try {
+      const stored = JSON.parse(localStorage.getItem(PREF_KEY));
+      if (stored && typeof stored === 'object') {
+        for (const key of Object.keys(prefs)) {
+          if (typeof stored[key] === 'boolean') prefs[key] = stored[key];
+        }
+      }
+    } catch {
+      // Defaults remain active when storage is unavailable or malformed.
+    }
+    return prefs;
+  }
+
+  function savePrefs(prefs) {
+    try {
+      localStorage.setItem(PREF_KEY, JSON.stringify({
+        url: Boolean(prefs.url),
+        title: Boolean(prefs.title),
+        conversationId: Boolean(prefs.conversationId),
+      }));
+    } catch {
+      // Preference persistence is optional and must never block an export.
+    }
+  }
+
+  function checkbox(id, label, checked) {
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.id = id;
+    input.checked = checked;
+    const text = document.createElement('span');
+    text.textContent = label;
+    const wrapper = document.createElement('label');
+    wrapper.htmlFor = id;
+    wrapper.append(input, text);
+    return { input, wrapper };
+  }
+
+  function showExportOptions(button) {
+    if (document.getElementById(OPTIONS_ID)) return;
+    const prefs = loadPrefs();
+    const overlay = document.createElement('div');
+    overlay.id = OPTIONS_ID;
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    const card = document.createElement('div');
+    card.className = 'cge-card';
+    const heading = document.createElement('h2');
+    heading.textContent = 'Export ChatGPT conversation';
+    const intro = document.createElement('p');
+    intro.textContent = 'Choose which identifying fields should be included in the offline HTML file.';
+    const url = checkbox('cge-pref-url', 'Include the conversation URL', prefs.url);
+    const title = checkbox('cge-pref-title', 'Include the conversation title and use it in the filename', prefs.title);
+    const conversationId = checkbox('cge-pref-conversation-id', 'Include the conversation ID in the HTML metadata', prefs.conversationId);
+    const actions = document.createElement('div');
+    actions.className = 'cge-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'cge-secondary';
+    cancel.textContent = 'Cancel';
+    const exportButton = document.createElement('button');
+    exportButton.type = 'button';
+    exportButton.className = 'cge-primary';
+    exportButton.textContent = 'Export HTML';
+    actions.append(cancel, exportButton);
+    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper, actions);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    cancel.addEventListener('click', close);
+    overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+    exportButton.addEventListener('click', () => {
+      const chosen = { url: url.input.checked, title: title.input.checked, conversationId: conversationId.input.checked };
+      savePrefs(chosen);
+      close();
+      exportCurrentConversation(button, chosen);
+    });
+    exportButton.focus();
+  }
+
+  function filenameFor(conversation, prefs, exportedAt) {
+    if (prefs.title) return sanitizeFilename(conversation.title);
+    const stamp = exportedAt.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+    return sanitizeFilename(`chatgpt-export-${stamp}`);
+  }
+
+  async function exportCurrentConversation(button, prefs = loadPrefs()) {
+    if (button?.dataset.state === 'busy') return;
+    if (button) {
+      button.dataset.state = 'busy';
+      button.textContent = 'Exporting…';
+    }
+
+    try {
+      const conversationId = getConversationIdFromUrl();
+      if (!conversationId) throw new ChatGPTClientError('missing-id', 'Open a ChatGPT conversation before exporting.');
+      showStatus('Loading conversation…', `Conversation ID: ${redactId(conversationId)}`);
+      const raw = await fetchConversation(conversationId);
+      showStatus('Formatting messages…');
+      const conversation = normalizeConversation(raw);
+      const exportedAt = new Date().toISOString();
+      const html = renderConversationHtml(conversation, {
+        exportedAt,
+        sourceUrl: prefs.url ? globalThis.location?.href : null,
+        includeConversationId: prefs.conversationId,
+        includeTitle: prefs.title,
+      });
+      downloadHtml(html, filenameFor(conversation, prefs, exportedAt));
+      showStatus('Download ready', `${conversation.stats.messageCount} message(s) exported; ${conversation.stats.omittedBlockCount} non-text block(s) omitted.`);
+    } catch (error) {
+      showStatus('Export failed', describeClientError(error), true);
+      console.error('[ChatGPT Chats Exporter]', error?.code ?? 'unknown', describeClientError(error));
+    } finally {
+      if (button) {
+        button.dataset.state = 'idle';
+        button.textContent = 'Export HTML';
+      }
+    }
+  }
+
+  function install() {
+    if (!isChatGPTHost()) return;
+    if (!document.body || document.getElementById(CONTROL_ID)) return;
+    installAuthCacheInvalidation();
+    addStyles();
+    const button = document.createElement('button');
+    button.id = CONTROL_ID;
+    button.type = 'button';
+    button.textContent = 'Export HTML';
+    button.title = 'Export the currently open ChatGPT conversation as HTML';
+    button.addEventListener('click', () => showExportOptions(button));
+    document.body.appendChild(button);
+  }
+
+  function boot() {
+    if (!document.body) return window.setTimeout(boot, 50);
+    install();
+  }
+
+  boot();
+})();
+
+})();

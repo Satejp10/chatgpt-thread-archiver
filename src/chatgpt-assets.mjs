@@ -1,4 +1,14 @@
-const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+export const IMAGE_LIMITS = Object.freeze({ perImageBytes: 3 * 1024 * 1024, totalBytes: 12 * 1024 * 1024, embeddedImageCount: 64 });
+const MAX_IMAGE_BYTES = IMAGE_LIMITS.perImageBytes;
+const MAX_TOTAL_IMAGE_BYTES = IMAGE_LIMITS.totalBytes;
+const MAX_EMBEDDED_IMAGE_COUNT = IMAGE_LIMITS.embeddedImageCount;
+
+export function applyImageBudget(result, { embeddedCount = 0, imageBytes = 0 } = {}, limits = IMAGE_LIMITS) {
+  if (result?.status !== 'embedded') return result;
+  if (embeddedCount >= limits.embeddedImageCount) return { status: 'unavailable', reason: `export exceeds the ${limits.embeddedImageCount} embedded-image limit`, budgetLimited: true };
+  if (imageBytes + (result.byteLength ?? 0) > limits.totalBytes) return { status: 'unavailable', reason: `export exceeds the ${Math.round(limits.totalBytes / (1024 * 1024))} MiB total embedded image budget`, budgetLimited: true };
+  return result;
+}
 const IMAGE_MIME_RE = /^image\/(?:png|jpe?g|webp|gif|avif|bmp|svg\+xml)$/i;
 const FILE_ID_RE = /file[-_][A-Za-z0-9_-]{4,200}/i;
 
@@ -90,7 +100,7 @@ function bytesToDataUrl(bytes, mime) {
   return `data:${mime};base64,${btoa(binary)}`;
 }
 
-async function fetchImageBytes(fetchImpl, url, headers, timeoutMs) {
+async function fetchImageBytes(fetchImpl, url, headers, timeoutMs, remainingBytes = Infinity) {
   const response = await fetchWithTimeout(fetchImpl, url, {
     method: 'GET',
     credentials: 'same-origin',
@@ -102,17 +112,19 @@ async function fetchImageBytes(fetchImpl, url, headers, timeoutMs) {
   if (!contentType) return asAssetResult('unavailable', 'asset response was not a supported image');
   const declaredSize = Number(response.headers.get('content-length'));
   if (Number.isFinite(declaredSize) && declaredSize > MAX_IMAGE_BYTES) return asAssetResult('unavailable', 'image exceeds the 3 MB embedded size limit');
+  if (Number.isFinite(declaredSize) && declaredSize > remainingBytes) return asAssetResult('unavailable', 'image exceeds the 12 MiB total embedded image budget', { budgetLimited: true });
   const buffer = await response.arrayBuffer();
   if (buffer.byteLength > MAX_IMAGE_BYTES) return asAssetResult('unavailable', 'image exceeds the 3 MB embedded size limit');
+  if (buffer.byteLength > remainingBytes) return asAssetResult('unavailable', 'image exceeds the 12 MiB total embedded image budget', { budgetLimited: true });
   const bytes = new Uint8Array(buffer);
   return asAssetResult('embedded', null, { dataUrl: bytesToDataUrl(bytes, contentType), mimeType: contentType, byteLength: buffer.byteLength });
 }
 
-async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, timeoutMs) {
+async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, timeoutMs, remainingBytes) {
   const pointer = String(asset?.pointer ?? '');
   if (!pointer) return asAssetResult('unavailable', 'image asset pointer is missing');
   const direct = allowedAssetUrl(pointer);
-  if (direct) return fetchImageBytes(fetchImpl, direct, auth.headers, timeoutMs);
+  if (direct) return fetchImageBytes(fetchImpl, direct, auth.headers, timeoutMs, remainingBytes);
 
   const fileId = assetFileId(pointer);
   if (!fileId) return asAssetResult('unavailable', 'no file identifier was found in the image asset pointer');
@@ -138,8 +150,8 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
     }
     const directMime = safeImageMime(response.headers.get('content-type'));
     if (directMime) {
-      const result = await fetchImageBytes(fetchImpl, new URL(path, currentAssetOrigin()).toString(), auth.headers, timeoutMs);
-      if (result.status === 'embedded') return result;
+      const result = await fetchImageBytes(fetchImpl, new URL(path, currentAssetOrigin()).toString(), auth.headers, timeoutMs, remainingBytes);
+      if (result.status === 'embedded' || result.budgetLimited) return result;
       lastReason = result.reason;
       continue;
     }
@@ -149,50 +161,63 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
       lastReason = 'asset metadata had no approved same-origin estuary image URL';
       continue;
     }
-    const result = await fetchImageBytes(fetchImpl, downloadUrl, auth.headers, timeoutMs);
+    const result = await fetchImageBytes(fetchImpl, downloadUrl, auth.headers, timeoutMs, remainingBytes);
     if (result.status === 'embedded') return result;
+    if (result.budgetLimited) return result;
     lastReason = result.reason;
   }
   return asAssetResult('unavailable', lastReason, { fileId });
 }
 
-export async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress } = {}) {
+export async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS } = {}) {
   if (!conversation || !Array.isArray(conversation.messages)) return conversation;
   const imageBlocks = conversation.messages.flatMap((message) => (message.textBlocks ?? []).filter((block) => block.type === 'image').map((block) => ({ block, postId: message.id })));
-  if (imageBlocks.length === 0) return { ...conversation, stats: { ...conversation.stats, imageCount: 0, imageEmbeddedCount: 0, imageUnavailableCount: 0, imageBytes: 0 } };
+  if (imageBlocks.length === 0) return { ...conversation, stats: { ...conversation.stats, imageCount: 0, imageEmbeddedCount: 0, imageUnavailableCount: 0, imageBytes: 0, imageBudgetLimitedCount: 0 } };
 
   const auth = await getAuthContext(fetchImpl);
   const cache = new Map();
+  const occurrenceResults = [];
   let completed = 0;
+  let embeddedCount = 0;
+  let unavailableCount = 0;
+  let imageBytes = 0;
+  let budgetLimitedCount = 0;
   for (const block of imageBlocks) {
     const pointer = String(block.block.asset?.pointer ?? '');
     if (!cache.has(pointer)) {
-      cache.set(pointer, await resolveOneImage(block.block.asset, conversationId, block.postId, auth, fetchImpl, timeoutMs));
+      const budgetExhausted = embeddedCount >= limits.embeddedImageCount || imageBytes >= limits.totalBytes;
+      cache.set(pointer, budgetExhausted
+        ? asAssetResult('unavailable', embeddedCount >= limits.embeddedImageCount ? `export exceeds the ${limits.embeddedImageCount} embedded-image limit` : `export exceeds the ${Math.round(limits.totalBytes / (1024 * 1024))} MiB total embedded image budget`, { budgetLimited: true })
+        : await resolveOneImage(block.block.asset, conversationId, block.postId, auth, fetchImpl, timeoutMs, limits.totalBytes - imageBytes));
     }
+    let result = cache.get(pointer) ?? asAssetResult('unavailable', 'image resolution did not run');
+    const budgetedResult = applyImageBudget(result, { embeddedCount, imageBytes }, limits);
+    if (budgetedResult !== result) result = budgetedResult;
+    if (result.status === 'embedded') {
+      embeddedCount += 1;
+      imageBytes += result.byteLength ?? 0;
+    }
+    if (result.status !== 'embedded') {
+      unavailableCount += 1;
+      if (result.budgetLimited) budgetLimitedCount += 1;
+    }
+    occurrenceResults.push(result);
     completed += 1;
     onProgress?.(completed, imageBlocks.length);
   }
 
-  let embeddedCount = 0;
-  let unavailableCount = 0;
-  let imageBytes = 0;
+  let imageIndex = 0;
   const messages = conversation.messages.map((message) => ({
     ...message,
     textBlocks: (message.textBlocks ?? []).map((block) => {
       if (block.type !== 'image') return block;
-      const result = cache.get(String(block.asset?.pointer ?? '')) ?? asAssetResult('unavailable', 'image resolution did not run');
-      if (result.status === 'embedded') {
-        embeddedCount += 1;
-        imageBytes += result.byteLength ?? 0;
-      } else {
-        unavailableCount += 1;
-      }
+      const result = occurrenceResults[imageIndex++] ?? asAssetResult('unavailable', 'image resolution did not run');
       return { ...block, asset: { ...block.asset, ...result } };
     }),
   }));
   return {
     ...conversation,
     messages,
-    stats: { ...conversation.stats, imageCount: imageBlocks.length, imageEmbeddedCount: embeddedCount, imageUnavailableCount: unavailableCount, imageBytes },
+    stats: { ...conversation.stats, imageCount: imageBlocks.length, imageEmbeddedCount: embeddedCount, imageUnavailableCount: unavailableCount, imageBytes, imageBudgetLimitedCount: budgetLimitedCount },
   };
 }

@@ -56,23 +56,14 @@ function labelForRole(role) {
   return ROLE_LABELS[role] ?? (role ? role[0].toUpperCase() + role.slice(1) : 'Unknown');
 }
 
-function decodeEscapedText(value) {
+function decodeEscapedText(value, { encodedPayload = false } = {}) {
   const text = String(value ?? '');
-  if (!/\\(?:n|r|t|u[0-9a-f]{4}|["\\])/.test(text)) return text;
+  if (!encodedPayload || !/\\(?:n|r|t|u[0-9a-f]{4}|["\\])/.test(text)) return text;
   try {
     const decoded = JSON.parse(`"${text}"`);
     return typeof decoded === 'string' ? decoded : text;
   } catch {
-    return text.replace(/\\\\|\\r\\n|\\n|\\r|\\t|\\u([0-9a-f]{4})|\\(["\\])/gi, (match, hex, quote) => {
-      if (match === '\\\\') return '\\';
-      if (hex) return String.fromCharCode(parseInt(hex, 16));
-      if (quote) return quote;
-      if (match === '\\r\\n') return '\n';
-      if (match === '\\n') return '\n';
-      if (match === '\\r') return '\r';
-      if (match === '\\t') return '\t';
-      return match;
-    });
+    return text;
   }
 }
 
@@ -80,13 +71,21 @@ function stripToolLineMarkers(text) {
   return String(text ?? '').replace(/^\s*\[L\d+\]\s?/gm, '');
 }
 
-function parseStructuredToolText(text) {
-  const candidate = stripToolLineMarkers(decodeEscapedText(text)).trim();
-  if (!candidate || !/^[\[{]/.test(candidate)) return null;
+function parseStructuredToolText(text, { encodedPayload = false } = {}) {
+  const raw = String(text ?? '');
+  const rawCandidate = stripToolLineMarkers(raw).trim();
+  if (!rawCandidate || !/^[\[{]/.test(rawCandidate)) return null;
   try {
-    return JSON.parse(candidate);
+    return JSON.parse(rawCandidate);
   } catch {
-    return null;
+    if (!encodedPayload) return null;
+    const decodedCandidate = stripToolLineMarkers(decodeEscapedText(raw, { encodedPayload: true })).trim();
+    if (!decodedCandidate || decodedCandidate === rawCandidate) return null;
+    try {
+      return JSON.parse(decodedCandidate);
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -95,7 +94,7 @@ const STRUCTURED_TEXT_KEYS = ['content', 'text', 'output', 'result', 'message'];
 function structuredReadableEntry(value) {
   if (!isPlainObject(value)) return null;
   for (const key of STRUCTURED_TEXT_KEYS) {
-    if (typeof value[key] === 'string' && value[key].trim()) return { key, text: decodeEscapedText(value[key]) };
+    if (typeof value[key] === 'string' && value[key].trim()) return { key, text: value[key] };
   }
   return null;
 }
@@ -112,12 +111,12 @@ function structuredRemainder(value) {
 }
 
 function formatToolTranscript(text) {
-  const decoded = decodeEscapedText(text);
-  return decoded.split('\n').map((line) => {
+  return String(text ?? '').split('\n').map((line) => {
     const marker = line.match(/^\s*\[L\d+\]\s*(.*)$/);
     if (!marker) return line;
-    const parsed = parseStructuredToolText(marker[1]);
-    if (parsed === null) return marker[1];
+    const payload = decodeEscapedText(marker[1], { encodedPayload: true });
+    const parsed = parseStructuredToolText(payload, { encodedPayload: true });
+    if (parsed === null) return payload;
     const readable = structuredReadableText(parsed);
     const remainder = structuredRemainder(parsed);
     if (readable && remainder) return `${readable}\n\n[additional structured fields]\n${JSON.stringify(remainder, null, 2)}`;
@@ -127,12 +126,10 @@ function formatToolTranscript(text) {
 
 function displayTextItems(text, role, kind, language = '') {
   const rawText = String(text ?? '');
-  const toolLike = ['tool', 'function', 'computer'].includes(role)
-    || /^\s*\[L\d+\]/m.test(rawText)
-    || /\\(?:n|r|t|u[0-9a-f]{4}|\"|\\)/.test(rawText);
+  const toolLike = ['tool', 'function', 'computer'].includes(role) || /^\s*\[L\d+\]/m.test(rawText);
   if (!toolLike) return [{ kind, text: rawText, language }];
 
-  const parsed = parseStructuredToolText(rawText);
+  const parsed = parseStructuredToolText(rawText, { encodedPayload: true });
   if (parsed !== null) {
     const readable = structuredReadableText(parsed);
     if (readable !== null) {
@@ -149,22 +146,36 @@ function displayTextItems(text, role, kind, language = '') {
 function contentCandidates(message) {
   const content = message?.content;
   const candidates = [];
-  if (typeof content === 'string') {
-    candidates.push({ kind: 'text', value: content });
-  } else if (isPlainObject(content)) {
-    const parts = Array.isArray(content.parts) ? content.parts : null;
-    if (parts) {
-      for (const part of parts) candidates.push({ kind: 'part', value: part });
+  const seen = new Set();
+  const add = (candidate) => {
+    let key;
+    try {
+      key = typeof candidate.value === 'string' ? `string:${candidate.value}` : `json:${JSON.stringify(candidate.value)}`;
+    } catch {
+      key = `object:${Object.prototype.toString.call(candidate.value)}`;
     }
-    if (typeof content.text === 'string') candidates.push({ kind: 'text', value: content.text });
-    if (typeof content.content === 'string') candidates.push({ kind: 'text', value: content.content });
-    if (Array.isArray(content.content)) {
-      for (const part of content.content) candidates.push({ kind: 'part', value: part });
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+  if (typeof content === 'string') {
+    add({ kind: 'text', value: content, source: 'content' });
+  } else if (isPlainObject(content)) {
+    const parts = Array.isArray(content.parts) ? content.parts : [];
+    const contentParts = Array.isArray(content.content) ? content.content : [];
+    if (parts.length > 0) {
+      for (const part of parts) add({ kind: 'part', value: part, source: 'parts' });
+    } else if (contentParts.length > 0) {
+      for (const part of contentParts) add({ kind: 'part', value: part, source: 'content' });
+    } else if (typeof content.content === 'string') {
+      add({ kind: 'text', value: content.content, source: 'content' });
+    } else if (typeof content.text === 'string') {
+      add({ kind: 'text', value: content.text, source: 'text' });
     }
   }
   const attachmentLists = [message?.metadata?.attachments, content?.metadata?.attachments].filter(Array.isArray);
   const attachments = [...new Set(attachmentLists.flat())];
-  for (const attachment of attachments) candidates.push({ kind: 'attachment', value: attachment });
+  for (const attachment of attachments) add({ kind: 'attachment', value: attachment });
   return candidates;
 }
 
@@ -584,7 +595,7 @@ function renderConversationHtml(conversation, { exportedAt = new Date().toISOStr
     ? `<p class="meta flag-warn">${conversation.stats.omittedBlockCount} omitted non-text block${conversation.stats.omittedBlockCount === 1 ? '' : 's'}</p>`
     : '<p class="meta flag-ok">Text blocks complete</p>';
   const imageLine = Number.isFinite(conversation.stats.imageCount) && conversation.stats.imageCount > 0
-    ? `<p class="meta">Images: ${conversation.stats.imageEmbeddedCount ?? 0} embedded, ${conversation.stats.imageUnavailableCount ?? 0} unavailable${Number(conversation.stats.imageBytes) > 0 ? ` · ${Math.ceil(Number(conversation.stats.imageBytes) / 1024)} KB embedded` : ''}</p>`
+    ? `<p class="meta">Images: ${conversation.stats.imageEmbeddedCount ?? 0} embedded, ${conversation.stats.imageUnavailableCount ?? 0} unavailable${conversation.stats.imageBudgetLimitedCount ? `; ${conversation.stats.imageBudgetLimitedCount} limited by export budget` : ''}${Number(conversation.stats.imageBytes) > 0 ? ` · ${Math.ceil(Number(conversation.stats.imageBytes) / 1024)} KB embedded` : ''}</p>`
     : '';
   const coverageLine = (conversation.stats.droppedNodeCount ?? 0) > 0 || (conversation.stats.duplicateMessageCount ?? 0) > 0
     ? `<p class="meta flag-warn">Coverage: ${conversation.stats.droppedNodeCount ?? 0} dropped node${conversation.stats.droppedNodeCount === 1 ? '' : 's'}, ${conversation.stats.duplicateMessageCount ?? 0} duplicate message${conversation.stats.duplicateMessageCount === 1 ? '' : 's'} removed</p>`
@@ -1071,7 +1082,17 @@ function describeClientError(error) {
   return lines.join('\n');
 }
 
-const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+const IMAGE_LIMITS = Object.freeze({ perImageBytes: 3 * 1024 * 1024, totalBytes: 12 * 1024 * 1024, embeddedImageCount: 64 });
+const MAX_IMAGE_BYTES = IMAGE_LIMITS.perImageBytes;
+const MAX_TOTAL_IMAGE_BYTES = IMAGE_LIMITS.totalBytes;
+const MAX_EMBEDDED_IMAGE_COUNT = IMAGE_LIMITS.embeddedImageCount;
+
+function applyImageBudget(result, { embeddedCount = 0, imageBytes = 0 } = {}, limits = IMAGE_LIMITS) {
+  if (result?.status !== 'embedded') return result;
+  if (embeddedCount >= limits.embeddedImageCount) return { status: 'unavailable', reason: `export exceeds the ${limits.embeddedImageCount} embedded-image limit`, budgetLimited: true };
+  if (imageBytes + (result.byteLength ?? 0) > limits.totalBytes) return { status: 'unavailable', reason: `export exceeds the ${Math.round(limits.totalBytes / (1024 * 1024))} MiB total embedded image budget`, budgetLimited: true };
+  return result;
+}
 const IMAGE_MIME_RE = /^image\/(?:png|jpe?g|webp|gif|avif|bmp|svg\+xml)$/i;
 const FILE_ID_RE = /file[-_][A-Za-z0-9_-]{4,200}/i;
 
@@ -1163,7 +1184,7 @@ function bytesToDataUrl(bytes, mime) {
   return `data:${mime};base64,${btoa(binary)}`;
 }
 
-async function fetchImageBytes(fetchImpl, url, headers, timeoutMs) {
+async function fetchImageBytes(fetchImpl, url, headers, timeoutMs, remainingBytes = Infinity) {
   const response = await fetchWithTimeout(fetchImpl, url, {
     method: 'GET',
     credentials: 'same-origin',
@@ -1175,17 +1196,19 @@ async function fetchImageBytes(fetchImpl, url, headers, timeoutMs) {
   if (!contentType) return asAssetResult('unavailable', 'asset response was not a supported image');
   const declaredSize = Number(response.headers.get('content-length'));
   if (Number.isFinite(declaredSize) && declaredSize > MAX_IMAGE_BYTES) return asAssetResult('unavailable', 'image exceeds the 3 MB embedded size limit');
+  if (Number.isFinite(declaredSize) && declaredSize > remainingBytes) return asAssetResult('unavailable', 'image exceeds the 12 MiB total embedded image budget', { budgetLimited: true });
   const buffer = await response.arrayBuffer();
   if (buffer.byteLength > MAX_IMAGE_BYTES) return asAssetResult('unavailable', 'image exceeds the 3 MB embedded size limit');
+  if (buffer.byteLength > remainingBytes) return asAssetResult('unavailable', 'image exceeds the 12 MiB total embedded image budget', { budgetLimited: true });
   const bytes = new Uint8Array(buffer);
   return asAssetResult('embedded', null, { dataUrl: bytesToDataUrl(bytes, contentType), mimeType: contentType, byteLength: buffer.byteLength });
 }
 
-async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, timeoutMs) {
+async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, timeoutMs, remainingBytes) {
   const pointer = String(asset?.pointer ?? '');
   if (!pointer) return asAssetResult('unavailable', 'image asset pointer is missing');
   const direct = allowedAssetUrl(pointer);
-  if (direct) return fetchImageBytes(fetchImpl, direct, auth.headers, timeoutMs);
+  if (direct) return fetchImageBytes(fetchImpl, direct, auth.headers, timeoutMs, remainingBytes);
 
   const fileId = assetFileId(pointer);
   if (!fileId) return asAssetResult('unavailable', 'no file identifier was found in the image asset pointer');
@@ -1211,8 +1234,8 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
     }
     const directMime = safeImageMime(response.headers.get('content-type'));
     if (directMime) {
-      const result = await fetchImageBytes(fetchImpl, new URL(path, currentAssetOrigin()).toString(), auth.headers, timeoutMs);
-      if (result.status === 'embedded') return result;
+      const result = await fetchImageBytes(fetchImpl, new URL(path, currentAssetOrigin()).toString(), auth.headers, timeoutMs, remainingBytes);
+      if (result.status === 'embedded' || result.budgetLimited) return result;
       lastReason = result.reason;
       continue;
     }
@@ -1222,51 +1245,64 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
       lastReason = 'asset metadata had no approved same-origin estuary image URL';
       continue;
     }
-    const result = await fetchImageBytes(fetchImpl, downloadUrl, auth.headers, timeoutMs);
+    const result = await fetchImageBytes(fetchImpl, downloadUrl, auth.headers, timeoutMs, remainingBytes);
     if (result.status === 'embedded') return result;
+    if (result.budgetLimited) return result;
     lastReason = result.reason;
   }
   return asAssetResult('unavailable', lastReason, { fileId });
 }
 
-async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress } = {}) {
+async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS } = {}) {
   if (!conversation || !Array.isArray(conversation.messages)) return conversation;
   const imageBlocks = conversation.messages.flatMap((message) => (message.textBlocks ?? []).filter((block) => block.type === 'image').map((block) => ({ block, postId: message.id })));
-  if (imageBlocks.length === 0) return { ...conversation, stats: { ...conversation.stats, imageCount: 0, imageEmbeddedCount: 0, imageUnavailableCount: 0, imageBytes: 0 } };
+  if (imageBlocks.length === 0) return { ...conversation, stats: { ...conversation.stats, imageCount: 0, imageEmbeddedCount: 0, imageUnavailableCount: 0, imageBytes: 0, imageBudgetLimitedCount: 0 } };
 
   const auth = await getAuthContext(fetchImpl);
   const cache = new Map();
+  const occurrenceResults = [];
   let completed = 0;
+  let embeddedCount = 0;
+  let unavailableCount = 0;
+  let imageBytes = 0;
+  let budgetLimitedCount = 0;
   for (const block of imageBlocks) {
     const pointer = String(block.block.asset?.pointer ?? '');
     if (!cache.has(pointer)) {
-      cache.set(pointer, await resolveOneImage(block.block.asset, conversationId, block.postId, auth, fetchImpl, timeoutMs));
+      const budgetExhausted = embeddedCount >= limits.embeddedImageCount || imageBytes >= limits.totalBytes;
+      cache.set(pointer, budgetExhausted
+        ? asAssetResult('unavailable', embeddedCount >= limits.embeddedImageCount ? `export exceeds the ${limits.embeddedImageCount} embedded-image limit` : `export exceeds the ${Math.round(limits.totalBytes / (1024 * 1024))} MiB total embedded image budget`, { budgetLimited: true })
+        : await resolveOneImage(block.block.asset, conversationId, block.postId, auth, fetchImpl, timeoutMs, limits.totalBytes - imageBytes));
     }
+    let result = cache.get(pointer) ?? asAssetResult('unavailable', 'image resolution did not run');
+    const budgetedResult = applyImageBudget(result, { embeddedCount, imageBytes }, limits);
+    if (budgetedResult !== result) result = budgetedResult;
+    if (result.status === 'embedded') {
+      embeddedCount += 1;
+      imageBytes += result.byteLength ?? 0;
+    }
+    if (result.status !== 'embedded') {
+      unavailableCount += 1;
+      if (result.budgetLimited) budgetLimitedCount += 1;
+    }
+    occurrenceResults.push(result);
     completed += 1;
     onProgress?.(completed, imageBlocks.length);
   }
 
-  let embeddedCount = 0;
-  let unavailableCount = 0;
-  let imageBytes = 0;
+  let imageIndex = 0;
   const messages = conversation.messages.map((message) => ({
     ...message,
     textBlocks: (message.textBlocks ?? []).map((block) => {
       if (block.type !== 'image') return block;
-      const result = cache.get(String(block.asset?.pointer ?? '')) ?? asAssetResult('unavailable', 'image resolution did not run');
-      if (result.status === 'embedded') {
-        embeddedCount += 1;
-        imageBytes += result.byteLength ?? 0;
-      } else {
-        unavailableCount += 1;
-      }
+      const result = occurrenceResults[imageIndex++] ?? asAssetResult('unavailable', 'image resolution did not run');
       return { ...block, asset: { ...block.asset, ...result } };
     }),
   }));
   return {
     ...conversation,
     messages,
-    stats: { ...conversation.stats, imageCount: imageBlocks.length, imageEmbeddedCount: embeddedCount, imageUnavailableCount: unavailableCount, imageBytes },
+    stats: { ...conversation.stats, imageCount: imageBlocks.length, imageEmbeddedCount: embeddedCount, imageUnavailableCount: unavailableCount, imageBytes, imageBudgetLimitedCount: budgetLimitedCount },
   };
 }
 
@@ -1490,7 +1526,7 @@ async function resolveConversationImages(conversation, { fetchImpl = globalThis.
       });
       downloadHtml(html, filenameFor(conversation, prefs, exportedAt));
       const imageSummary = Number.isFinite(conversation.stats.imageCount) && conversation.stats.imageCount > 0
-        ? ` ${conversation.stats.imageEmbeddedCount} image(s) embedded; ${conversation.stats.imageUnavailableCount} unavailable.`
+        ? ` ${conversation.stats.imageEmbeddedCount} image(s) embedded; ${conversation.stats.imageUnavailableCount} unavailable${conversation.stats.imageBudgetLimitedCount ? `; ${conversation.stats.imageBudgetLimitedCount} limited by export budget` : ''}.`
         : '';
       showStatus('Download ready', `${conversation.stats.messageCount} message(s) exported; ${conversation.stats.omittedBlockCount} non-text block(s) omitted.${imageSummary}`);
     } catch (error) {

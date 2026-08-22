@@ -218,7 +218,7 @@
       });
       downloadHtml(html, filenameFor(conversation, prefs, exportedAt));
       const imageSummary = Number.isFinite(conversation.stats.imageCount) && conversation.stats.imageCount > 0
-        ? ` ${conversation.stats.imageEmbeddedCount} image(s) embedded; ${conversation.stats.imageUnavailableCount} unavailable.`
+        ? ` ${conversation.stats.imageEmbeddedCount} image(s) embedded; ${conversation.stats.imageUnavailableCount} unavailable${conversation.stats.imageBudgetLimitedCount ? `; ${conversation.stats.imageBudgetLimitedCount} limited by export budget` : ''}.`
         : '';
       showStatus('Download ready', `${conversation.stats.messageCount} message(s) exported; ${conversation.stats.omittedBlockCount} non-text block(s) omitted.${imageSummary}`);
     } catch (error) {

@@ -1,4 +1,4 @@
-const ARCHIVER_VERSION = '0.7.0';
+const ARCHIVER_VERSION = '0.8.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -462,6 +462,7 @@ function renderBlock(block) {
   if (block.type === 'omitted') return `<p class="omitted">[non-text content omitted: ${escapeHtml(block.reason)}]</p>`;
   if (block.type === 'image') {
     const asset = block.asset ?? {};
+    if (asset.status === 'excluded') return '<p class="omitted">[image excluded by export settings]</p>';
     if (asset.status === 'embedded' && typeof asset.dataUrl === 'string' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(asset.dataUrl)) {
       const dimensions = Number.isFinite(asset.width) && Number.isFinite(asset.height) ? ` width="${escapeAttribute(String(Math.min(asset.width, 10000)))}" height="${escapeAttribute(String(Math.min(asset.height, 10000)))}"` : '';
       const label = asset.generated ? 'Generated image' : 'Uploaded/reference image';
@@ -664,7 +665,7 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
     ? `<p class="meta flag-warn">${conversation.stats.omittedBlockCount} omitted non-text block${conversation.stats.omittedBlockCount === 1 ? '' : 's'}</p>`
     : '<p class="meta flag-ok">Text blocks complete</p>';
   const imageLine = Number.isFinite(conversation.stats.imageCount) && conversation.stats.imageCount > 0
-    ? `<p class="meta">Images: ${conversation.stats.imageEmbeddedCount ?? 0} embedded, ${conversation.stats.imageUnavailableCount ?? 0} unavailable${conversation.stats.imageBudgetLimitedCount ? `; ${conversation.stats.imageBudgetLimitedCount} limited by export budget` : ''}${Number(conversation.stats.imageBytes) > 0 ? ` · ${Math.ceil(Number(conversation.stats.imageBytes) / 1024)} KB embedded` : ''}</p>`
+    ? `<p class="meta">Images: ${conversation.stats.imageEmbeddedCount ?? 0} embedded, ${conversation.stats.imageExcludedCount ?? 0} excluded, ${conversation.stats.imageUnavailableCount ?? 0} unavailable${conversation.stats.imageBudgetLimitedCount ? `; ${conversation.stats.imageBudgetLimitedCount} limited by export budget` : ''}${Number(conversation.stats.imageBytes) > 0 ? ` · ${Math.ceil(Number(conversation.stats.imageBytes) / 1024)} KB embedded` : ''}</p>`
     : '';
   const coverageLine = (conversation.stats.droppedNodeCount ?? 0) > 0 || (conversation.stats.duplicateMessageCount ?? 0) > 0
     ? `<p class="meta flag-warn">Coverage: ${conversation.stats.droppedNodeCount ?? 0} dropped node${conversation.stats.droppedNodeCount === 1 ? '' : 's'}, ${conversation.stats.duplicateMessageCount ?? 0} duplicate message${conversation.stats.duplicateMessageCount === 1 ? '' : 's'} removed</p>`

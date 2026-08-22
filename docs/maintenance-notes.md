@@ -18,9 +18,9 @@ The API exporter’s absolute `create_time` timestamp handling is intentional. D
 
 ## Feature invariants
 
-The prompt rail is user-only, uses stable file-local message IDs, and has a no-JavaScript ordered-list fallback. Keep the rail list single-sourced; avoid emitting a second copy solely for the fixed layout. The copy button reads rendered message DOM from the offline file and never reaches back to ChatGPT. ChatGPT image shapes are normalized before rendering, including normal asset pointers, nested image records, execution-output image messages, alternate URL/file-pointer fields, and already-embedded data URLs.
+The prompt rail is user-only, uses stable file-local message IDs, and has a no-JavaScript ordered-list fallback. Keep the rail list single-sourced; avoid emitting a second copy solely for the fixed layout. The copy button reads rendered message DOM from the offline file and never reaches back to ChatGPT. ChatGPT image shapes are normalized before rendering, including normal asset pointers, nested image records, execution-output image messages, alternate URL/file-pointer fields, and already-embedded data URLs. Include-all, exclude-all, and choose-individually modes must produce explicit image counts and exclusion markers; excluded images must not trigger asset requests.
 
-Privacy preferences store only booleans under `chatgpt-thread-archiver-prefs`. The old `chatgpt-chats-exporter-prefs` key is migrated once when it contains valid preferences; if migration cannot complete cleanly, the old key remains active. Disabled URL, title, and conversation-ID fields must be omitted entirely. The conversation ID is disabled by default.
+Privacy preferences store URL/title/conversation-ID booleans and the broad ChatGPT image mode under `chatgpt-thread-archiver-prefs`. The old `chatgpt-chats-exporter-prefs` key is migrated once when it contains valid preferences; if migration cannot complete cleanly, the old key remains active. Disabled URL, title, and conversation-ID fields must be omitted entirely. The conversation ID is disabled by default. Individual image selections are per-export only and must never be persisted.
 
 ## Validation debt
 

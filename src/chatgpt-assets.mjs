@@ -197,37 +197,47 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
   return asAssetResult('unavailable', lastReason, { fileId });
 }
 
-export async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null } = {}) {
+export async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null, includeImages = true, selectedImageIndices = null } = {}) {
   if (!conversation || !Array.isArray(conversation.messages)) return conversation;
   const imageBlocks = conversation.messages.flatMap((message) => (message.textBlocks ?? []).filter((block) => block.type === 'image').map((block) => ({ block, postId: message.id })));
-  if (imageBlocks.length === 0) return { ...conversation, stats: { ...conversation.stats, imageCount: 0, imageEmbeddedCount: 0, imageUnavailableCount: 0, imageBytes: 0, imageBudgetLimitedCount: 0 } };
+  if (imageBlocks.length === 0) return { ...conversation, stats: { ...conversation.stats, imageCount: 0, imageEmbeddedCount: 0, imageExcludedCount: 0, imageUnavailableCount: 0, imageBytes: 0, imageBudgetLimitedCount: 0 } };
 
-  const auth = authContext ?? await getAuthContext(fetchImpl);
+  const selected = selectedImageIndices === null ? null : new Set(selectedImageIndices);
+  const shouldInclude = (index) => Boolean(includeImages) && (selected === null || selected.has(index));
+  const shouldResolveAny = Boolean(includeImages) && (selected === null || selected.size > 0);
+  const auth = shouldResolveAny ? (authContext ?? await getAuthContext(fetchImpl)) : null;
   const cache = new Map();
   const occurrenceResults = [];
   let completed = 0;
   let embeddedCount = 0;
+  let excludedCount = 0;
   let unavailableCount = 0;
   let imageBytes = 0;
   let budgetLimitedCount = 0;
-  for (const block of imageBlocks) {
-    const pointer = String(block.block.asset?.pointer ?? '');
-    if (!cache.has(pointer)) {
-      const budgetExhausted = embeddedCount >= limits.embeddedImageCount || imageBytes >= limits.totalBytes;
-      cache.set(pointer, budgetExhausted
-        ? asAssetResult('unavailable', embeddedCount >= limits.embeddedImageCount ? `export exceeds the ${limits.embeddedImageCount} embedded-image limit` : `export exceeds the ${Math.round(limits.totalBytes / (1024 * 1024))} MiB total embedded image budget`, { budgetLimited: true })
-        : await resolveOneImage(block.block.asset, conversationId, block.postId, auth, fetchImpl, timeoutMs, limits.totalBytes - imageBytes));
-    }
-    let result = cache.get(pointer) ?? asAssetResult('unavailable', 'image resolution did not run');
-    const budgetedResult = applyImageBudget(result, { embeddedCount, imageBytes }, limits);
-    if (budgetedResult !== result) result = budgetedResult;
-    if (result.status === 'embedded') {
-      embeddedCount += 1;
-      imageBytes += result.byteLength ?? 0;
-    }
-    if (result.status !== 'embedded') {
-      unavailableCount += 1;
-      if (result.budgetLimited) budgetLimitedCount += 1;
+  for (let index = 0; index < imageBlocks.length; index += 1) {
+    const block = imageBlocks[index];
+    let result;
+    if (!shouldInclude(index)) {
+      result = asAssetResult('excluded', 'image excluded by export settings');
+      excludedCount += 1;
+    } else {
+      const pointer = String(block.block.asset?.pointer ?? '');
+      if (!cache.has(pointer)) {
+        const budgetExhausted = embeddedCount >= limits.embeddedImageCount || imageBytes >= limits.totalBytes;
+        cache.set(pointer, budgetExhausted
+          ? asAssetResult('unavailable', embeddedCount >= limits.embeddedImageCount ? `export exceeds the ${limits.embeddedImageCount} embedded-image limit` : `export exceeds the ${Math.round(limits.totalBytes / (1024 * 1024))} MiB total embedded image budget`, { budgetLimited: true })
+          : await resolveOneImage(block.block.asset, conversationId, block.postId, auth, fetchImpl, timeoutMs, limits.totalBytes - imageBytes));
+      }
+      result = cache.get(pointer) ?? asAssetResult('unavailable', 'image resolution did not run');
+      const budgetedResult = applyImageBudget(result, { embeddedCount, imageBytes }, limits);
+      if (budgetedResult !== result) result = budgetedResult;
+      if (result.status === 'embedded') {
+        embeddedCount += 1;
+        imageBytes += result.byteLength ?? 0;
+      } else {
+        unavailableCount += 1;
+        if (result.budgetLimited) budgetLimitedCount += 1;
+      }
     }
     occurrenceResults.push(result);
     completed += 1;
@@ -246,6 +256,6 @@ export async function resolveConversationImages(conversation, { fetchImpl = glob
   return {
     ...conversation,
     messages,
-    stats: { ...conversation.stats, imageCount: imageBlocks.length, imageEmbeddedCount: embeddedCount, imageUnavailableCount: unavailableCount, imageBytes, imageBudgetLimitedCount: budgetLimitedCount },
+    stats: { ...conversation.stats, imageCount: imageBlocks.length, imageEmbeddedCount: embeddedCount, imageExcludedCount: excludedCount, imageUnavailableCount: unavailableCount, imageBytes, imageBudgetLimitedCount: budgetLimitedCount },
   };
 }

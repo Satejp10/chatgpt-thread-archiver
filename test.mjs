@@ -40,8 +40,8 @@ assert.match(simpleHtml, /class="copy-btn"/);
 assert.match(simpleHtml, /querySelector\("\.content"\)/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.7\.0"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.7\.0/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.8\.0"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.8\.0/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -151,9 +151,9 @@ embeddedImage.asset = { ...embeddedImage.asset, status: 'embedded', dataUrl: 'da
 const embeddedImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
-assert.match(embeddedImageHtml, /Images: 1 embedded, 0 unavailable/);
+assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.7\.0/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.8\.0/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -183,6 +183,25 @@ assert.equal(resolvedDataImages.stats.imageCount, 3);
 assert.equal(resolvedDataImages.stats.imageEmbeddedCount, 3);
 assert.equal(resolvedDataImages.stats.imageUnavailableCount, 0);
 assert.equal(resolvedDataImages.stats.imageBytes, 24);
+const excludedImages = await resolveConversationImages(imageVariants, {
+  conversationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  includeImages: false,
+  fetchImpl: async () => { throw new Error('excluded images must not be downloaded'); },
+});
+assert.equal(excludedImages.stats.imageEmbeddedCount, 0);
+assert.equal(excludedImages.stats.imageExcludedCount, 3);
+assert.equal(excludedImages.stats.imageUnavailableCount, 0);
+assert.ok(excludedImages.messages.flatMap((message) => message.textBlocks).filter((block) => block.type === 'image').every((block) => block.asset.status === 'excluded'));
+assert.match(renderConversationHtml(excludedImages), /\[image excluded by export settings\]/);
+const selectedImages = await resolveConversationImages(imageVariants, {
+  conversationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  selectedImageIndices: new Set([1]),
+  authContext: { headers: {} },
+  fetchImpl: async () => { throw new Error('unselected data images must not be downloaded'); },
+});
+assert.equal(selectedImages.stats.imageEmbeddedCount, 1);
+assert.equal(selectedImages.stats.imageExcludedCount, 2);
+assert.equal(selectedImages.stats.imageUnavailableCount, 0);
 const metadataRequests = [];
 const metadataConversation = normalizeConversation({ title: 'Metadata image', mapping: { root: { parent: null, children: ['image'] }, image: { parent: 'root', children: [], message: { id: 'image', author: { role: 'user' }, content: { parts: [{ content_type: 'image_asset_pointer', asset_pointer: 'sediment://file-abc123' }] } } } }, current_node: 'image' });
 const resolvedMetadataImage = await resolveConversationImages(metadataConversation, {
@@ -212,6 +231,8 @@ assert.match(assetsSource, /download_intent=download/);
 assert.match(assetsSource, /include_library_file_state=true/);
 assert.match(assetsSource, /post_id=/);
 assert.match(assetsSource, /data:\$\{mime\};base64/);
+assert.match(assetsSource, /includeImages/);
+assert.match(assetsSource, /imageExcludedCount/);
 const approvedImageUrl = 'https://chatgpt.com/backend-api/estuary/content?id=test&ts=1&p=fs&sig=test&v=0';
 assert.equal(candidateDownloadUrl({ nested: { href: approvedImageUrl } }), approvedImageUrl);
 assert.equal(candidateDownloadUrl({ download_url: 'https://example.invalid/image.png' }), null);
@@ -340,12 +361,14 @@ assert.match(uiSource, /bottom: calc\(138px \+ env\(safe-area-inset-bottom/);
 assert.match(assetsSource, /const chunkSize = 0x2000/);
 assert.match(uiSource, /localStorage\.removeItem\(LEGACY_PREF_KEY\)/);
 assert.match(uiSource, /deriveExportStats/);
+assert.match(uiSource, /Choose images after loading the conversation/);
+assert.match(uiSource, /imageMode/);
 assert.match(statsSource, /wordCount/);
 assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.7\.0/);
+assert.match(buildSource, /@version      0\.8\.0/);
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/c/*'));
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/s/*'));
 assert.ok(buildSource.includes('// @match        https://claude.ai/chat/*'));

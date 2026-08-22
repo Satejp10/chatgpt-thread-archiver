@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.7.0
-// @description  Export the currently open ChatGPT or Claude.ai conversation to self-contained HTML with safe local statistics.
+// @version      0.8.0
+// @description  Export the currently open ChatGPT or Claude.ai conversation to self-contained HTML with image choices and safe local statistics.
 // @match        https://chatgpt.com/c/*
 // @match        https://chatgpt.com/s/*
 // @match        https://claude.ai/chat/*
@@ -12,7 +12,7 @@
 
 (() => {
 'use strict';
-const ARCHIVER_VERSION = '0.7.0';
+const ARCHIVER_VERSION = '0.8.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -476,6 +476,7 @@ function renderBlock(block) {
   if (block.type === 'omitted') return `<p class="omitted">[non-text content omitted: ${escapeHtml(block.reason)}]</p>`;
   if (block.type === 'image') {
     const asset = block.asset ?? {};
+    if (asset.status === 'excluded') return '<p class="omitted">[image excluded by export settings]</p>';
     if (asset.status === 'embedded' && typeof asset.dataUrl === 'string' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(asset.dataUrl)) {
       const dimensions = Number.isFinite(asset.width) && Number.isFinite(asset.height) ? ` width="${escapeAttribute(String(Math.min(asset.width, 10000)))}" height="${escapeAttribute(String(Math.min(asset.height, 10000)))}"` : '';
       const label = asset.generated ? 'Generated image' : 'Uploaded/reference image';
@@ -678,7 +679,7 @@ function renderConversationHtml(conversation, { exportedAt = new Date().toISOStr
     ? `<p class="meta flag-warn">${conversation.stats.omittedBlockCount} omitted non-text block${conversation.stats.omittedBlockCount === 1 ? '' : 's'}</p>`
     : '<p class="meta flag-ok">Text blocks complete</p>';
   const imageLine = Number.isFinite(conversation.stats.imageCount) && conversation.stats.imageCount > 0
-    ? `<p class="meta">Images: ${conversation.stats.imageEmbeddedCount ?? 0} embedded, ${conversation.stats.imageUnavailableCount ?? 0} unavailable${conversation.stats.imageBudgetLimitedCount ? `; ${conversation.stats.imageBudgetLimitedCount} limited by export budget` : ''}${Number(conversation.stats.imageBytes) > 0 ? ` · ${Math.ceil(Number(conversation.stats.imageBytes) / 1024)} KB embedded` : ''}</p>`
+    ? `<p class="meta">Images: ${conversation.stats.imageEmbeddedCount ?? 0} embedded, ${conversation.stats.imageExcludedCount ?? 0} excluded, ${conversation.stats.imageUnavailableCount ?? 0} unavailable${conversation.stats.imageBudgetLimitedCount ? `; ${conversation.stats.imageBudgetLimitedCount} limited by export budget` : ''}${Number(conversation.stats.imageBytes) > 0 ? ` · ${Math.ceil(Number(conversation.stats.imageBytes) / 1024)} KB embedded` : ''}</p>`
     : '';
   const coverageLine = (conversation.stats.droppedNodeCount ?? 0) > 0 || (conversation.stats.duplicateMessageCount ?? 0) > 0
     ? `<p class="meta flag-warn">Coverage: ${conversation.stats.droppedNodeCount ?? 0} dropped node${conversation.stats.droppedNodeCount === 1 ? '' : 's'}, ${conversation.stats.duplicateMessageCount ?? 0} duplicate message${conversation.stats.duplicateMessageCount === 1 ? '' : 's'} removed</p>`
@@ -1624,37 +1625,47 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
   return asAssetResult('unavailable', lastReason, { fileId });
 }
 
-async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null } = {}) {
+async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null, includeImages = true, selectedImageIndices = null } = {}) {
   if (!conversation || !Array.isArray(conversation.messages)) return conversation;
   const imageBlocks = conversation.messages.flatMap((message) => (message.textBlocks ?? []).filter((block) => block.type === 'image').map((block) => ({ block, postId: message.id })));
-  if (imageBlocks.length === 0) return { ...conversation, stats: { ...conversation.stats, imageCount: 0, imageEmbeddedCount: 0, imageUnavailableCount: 0, imageBytes: 0, imageBudgetLimitedCount: 0 } };
+  if (imageBlocks.length === 0) return { ...conversation, stats: { ...conversation.stats, imageCount: 0, imageEmbeddedCount: 0, imageExcludedCount: 0, imageUnavailableCount: 0, imageBytes: 0, imageBudgetLimitedCount: 0 } };
 
-  const auth = authContext ?? await getAuthContext(fetchImpl);
+  const selected = selectedImageIndices === null ? null : new Set(selectedImageIndices);
+  const shouldInclude = (index) => Boolean(includeImages) && (selected === null || selected.has(index));
+  const shouldResolveAny = Boolean(includeImages) && (selected === null || selected.size > 0);
+  const auth = shouldResolveAny ? (authContext ?? await getAuthContext(fetchImpl)) : null;
   const cache = new Map();
   const occurrenceResults = [];
   let completed = 0;
   let embeddedCount = 0;
+  let excludedCount = 0;
   let unavailableCount = 0;
   let imageBytes = 0;
   let budgetLimitedCount = 0;
-  for (const block of imageBlocks) {
-    const pointer = String(block.block.asset?.pointer ?? '');
-    if (!cache.has(pointer)) {
-      const budgetExhausted = embeddedCount >= limits.embeddedImageCount || imageBytes >= limits.totalBytes;
-      cache.set(pointer, budgetExhausted
-        ? asAssetResult('unavailable', embeddedCount >= limits.embeddedImageCount ? `export exceeds the ${limits.embeddedImageCount} embedded-image limit` : `export exceeds the ${Math.round(limits.totalBytes / (1024 * 1024))} MiB total embedded image budget`, { budgetLimited: true })
-        : await resolveOneImage(block.block.asset, conversationId, block.postId, auth, fetchImpl, timeoutMs, limits.totalBytes - imageBytes));
-    }
-    let result = cache.get(pointer) ?? asAssetResult('unavailable', 'image resolution did not run');
-    const budgetedResult = applyImageBudget(result, { embeddedCount, imageBytes }, limits);
-    if (budgetedResult !== result) result = budgetedResult;
-    if (result.status === 'embedded') {
-      embeddedCount += 1;
-      imageBytes += result.byteLength ?? 0;
-    }
-    if (result.status !== 'embedded') {
-      unavailableCount += 1;
-      if (result.budgetLimited) budgetLimitedCount += 1;
+  for (let index = 0; index < imageBlocks.length; index += 1) {
+    const block = imageBlocks[index];
+    let result;
+    if (!shouldInclude(index)) {
+      result = asAssetResult('excluded', 'image excluded by export settings');
+      excludedCount += 1;
+    } else {
+      const pointer = String(block.block.asset?.pointer ?? '');
+      if (!cache.has(pointer)) {
+        const budgetExhausted = embeddedCount >= limits.embeddedImageCount || imageBytes >= limits.totalBytes;
+        cache.set(pointer, budgetExhausted
+          ? asAssetResult('unavailable', embeddedCount >= limits.embeddedImageCount ? `export exceeds the ${limits.embeddedImageCount} embedded-image limit` : `export exceeds the ${Math.round(limits.totalBytes / (1024 * 1024))} MiB total embedded image budget`, { budgetLimited: true })
+          : await resolveOneImage(block.block.asset, conversationId, block.postId, auth, fetchImpl, timeoutMs, limits.totalBytes - imageBytes));
+      }
+      result = cache.get(pointer) ?? asAssetResult('unavailable', 'image resolution did not run');
+      const budgetedResult = applyImageBudget(result, { embeddedCount, imageBytes }, limits);
+      if (budgetedResult !== result) result = budgetedResult;
+      if (result.status === 'embedded') {
+        embeddedCount += 1;
+        imageBytes += result.byteLength ?? 0;
+      } else {
+        unavailableCount += 1;
+        if (result.budgetLimited) budgetLimitedCount += 1;
+      }
     }
     occurrenceResults.push(result);
     completed += 1;
@@ -1673,7 +1684,7 @@ async function resolveConversationImages(conversation, { fetchImpl = globalThis.
   return {
     ...conversation,
     messages,
-    stats: { ...conversation.stats, imageCount: imageBlocks.length, imageEmbeddedCount: embeddedCount, imageUnavailableCount: unavailableCount, imageBytes, imageBudgetLimitedCount: budgetLimitedCount },
+    stats: { ...conversation.stats, imageCount: imageBlocks.length, imageEmbeddedCount: embeddedCount, imageExcludedCount: excludedCount, imageUnavailableCount: unavailableCount, imageBytes, imageBudgetLimitedCount: budgetLimitedCount },
   };
 }
 
@@ -1747,6 +1758,8 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
       #${OPTIONS_ID} label { display: flex; gap: 9px; align-items: flex-start; margin: 10px 0; cursor: pointer; }
       #${OPTIONS_ID} input { margin-top: 3px; }
       #${OPTIONS_ID} .cge-actions { display: flex; gap: 9px; justify-content: flex-end; margin-top: 20px; }
+      #${OPTIONS_ID} fieldset { max-height: min(60vh, 520px); overflow: auto; margin: 16px 0 0; padding: 8px 12px; border: 1px solid rgb(156 163 175 / .45); border-radius: 9px; }
+      #${OPTIONS_ID} legend { padding: 0 5px; font-weight: 700; }
       #${OPTIONS_ID} button { border: 0; border-radius: 8px; padding: 9px 13px; cursor: pointer; font: inherit; }
       #${OPTIONS_ID} .cge-primary { background: #111827; color: white; }
       #${OPTIONS_ID} .cge-secondary { background: rgb(127 127 127 / .16); color: CanvasText; }
@@ -1793,7 +1806,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
   }
 
   function defaultPrefs() {
-    return { url: true, title: true, conversationId: false };
+    return { url: true, title: true, conversationId: false, imageMode: 'all' };
   }
 
   function parsePrefs(raw) {
@@ -1802,7 +1815,8 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
       const value = JSON.parse(raw);
       const keys = ['url', 'title', 'conversationId'];
       if (!value || typeof value !== 'object' || keys.some((key) => typeof value[key] !== 'boolean')) return null;
-      return { url: value.url, title: value.title, conversationId: value.conversationId };
+      const imageMode = ['all', 'none', 'choose'].includes(value.imageMode) ? value.imageMode : 'all';
+      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode };
     } catch {
       return null;
     }
@@ -1844,6 +1858,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
         url: Boolean(prefs.url),
         title: Boolean(prefs.title),
         conversationId: Boolean(prefs.conversationId),
+        imageMode: ['all', 'none', 'choose'].includes(prefs.imageMode) ? prefs.imageMode : 'all',
       }));
     } catch {
       // Preference persistence is optional and must never block an export.
@@ -1863,10 +1878,98 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
     return { input, wrapper };
   }
 
+  function radio(name, id, label, value, checked) {
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = name;
+    input.id = id;
+    input.value = value;
+    input.checked = checked;
+    const text = document.createElement('span');
+    text.textContent = label;
+    const wrapper = document.createElement('label');
+    wrapper.htmlFor = id;
+    wrapper.append(input, text);
+    return { input, wrapper };
+  }
+
   function providerForLocation() {
     if (isChatGPTHost() && isExporterRoute()) return 'ChatGPT';
     if (isClaudeHost() && isClaudeExporterRoute()) return 'Claude';
     return null;
+  }
+
+  function imageEntries(conversation) {
+    let index = 0;
+    let turnIndex = 0;
+    const entries = [];
+    for (const message of (conversation?.messages ?? [])) {
+      if (message.role !== 'unknown') turnIndex += 1;
+      for (const block of message.textBlocks ?? []) {
+        if (block.type !== 'image') continue;
+        entries.push({
+          index: index++,
+          messageIndex: turnIndex,
+          speaker: message.authorLabel ?? (message.role === 'user' ? 'You' : 'ChatGPT'),
+          generated: Boolean(block.asset?.generated),
+          sizeBytes: Number.isFinite(block.asset?.sizeBytes) ? block.asset.sizeBytes : null,
+        });
+      }
+    }
+    return entries;
+  }
+
+  function formatImageSize(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) return 'size unknown';
+    if (bytes < 1024) return `${bytes} B`;
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+
+  function showImageSelection(conversation) {
+    const entries = imageEntries(conversation);
+    if (entries.length === 0) return Promise.resolve(new Set());
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.id = OPTIONS_ID;
+      overlay.setAttribute('role', 'dialog');
+      overlay.setAttribute('aria-modal', 'true');
+      const card = document.createElement('div');
+      card.className = 'cge-card';
+      const heading = document.createElement('h2');
+      heading.textContent = 'Choose images to include';
+      const intro = document.createElement('p');
+      intro.textContent = 'Images are selected by default. Unselected images will not be downloaded and will be marked as excluded in the HTML.';
+      const fieldset = document.createElement('fieldset');
+      const legend = document.createElement('legend');
+      legend.textContent = `${entries.length} image${entries.length === 1 ? '' : 's'} found`;
+      fieldset.appendChild(legend);
+      const inputs = [];
+      for (const entry of entries) {
+        const image = checkbox(`cge-image-${entry.index}`, `Image ${entry.index + 1} · message ${entry.messageIndex} · ${entry.speaker} · ${entry.generated ? 'generated' : 'uploaded/reference'} · ${formatImageSize(entry.sizeBytes)}`, true);
+        image.input.dataset.imageIndex = String(entry.index);
+        inputs.push(image.input);
+        fieldset.appendChild(image.wrapper);
+      }
+      const actions = document.createElement('div');
+      actions.className = 'cge-actions';
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'cge-secondary';
+      cancel.textContent = 'Cancel';
+      const continueButton = document.createElement('button');
+      continueButton.type = 'button';
+      continueButton.className = 'cge-primary';
+      continueButton.textContent = 'Export selected';
+      actions.append(cancel, continueButton);
+      card.append(heading, intro, fieldset, actions);
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+      const close = (selection) => { overlay.remove(); resolve(selection); };
+      cancel.addEventListener('click', () => close(null));
+      overlay.addEventListener('click', (event) => { if (event.target === overlay) close(null); });
+      continueButton.addEventListener('click', () => close(new Set(inputs.filter((input) => input.checked).map((input) => Number(input.dataset.imageIndex)))));
+      continueButton.focus();
+    });
   }
 
   function showExportOptions(button, provider) {
@@ -1881,10 +1984,23 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
     const heading = document.createElement('h2');
     heading.textContent = `Export ${provider} conversation`;
     const intro = document.createElement('p');
-    intro.textContent = 'Choose which identifying fields should be included in the offline HTML file.';
+    intro.textContent = 'Choose which identifying fields and images should be included in the offline HTML file.';
     const url = checkbox('cge-pref-url', 'Include the conversation URL', prefs.url);
     const title = checkbox('cge-pref-title', 'Include the conversation title and use it in the filename', prefs.title);
     const conversationId = checkbox('cge-pref-conversation-id', 'Include the conversation ID in the HTML metadata', prefs.conversationId);
+    const imageChoices = [];
+    let imageFieldset = null;
+    if (provider === 'ChatGPT') {
+      imageFieldset = document.createElement('fieldset');
+      const imageLegend = document.createElement('legend');
+      imageLegend.textContent = 'Images';
+      imageFieldset.appendChild(imageLegend);
+      for (const choice of [['all', 'Include all images'], ['none', 'Exclude all images'], ['choose', 'Choose images after loading the conversation']]) {
+        const imageRadio = radio('cge-image-mode', `cge-image-mode-${choice[0]}`, choice[1], choice[0], prefs.imageMode === choice[0]);
+        imageChoices.push(imageRadio.input);
+        imageFieldset.appendChild(imageRadio.wrapper);
+      }
+    }
     const actions = document.createElement('div');
     actions.className = 'cge-actions';
     const cancel = document.createElement('button');
@@ -1896,7 +2012,9 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
     exportButton.className = 'cge-primary';
     exportButton.textContent = 'Export HTML';
     actions.append(cancel, exportButton);
-    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper, actions);
+    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper);
+    if (imageFieldset) card.appendChild(imageFieldset);
+    card.appendChild(actions);
     overlay.appendChild(card);
     document.body.appendChild(overlay);
 
@@ -1904,10 +2022,15 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
     cancel.addEventListener('click', close);
     overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
     exportButton.addEventListener('click', () => {
-      const chosen = { url: url.input.checked, title: title.input.checked, conversationId: conversationId.input.checked };
+      const chosen = {
+        url: url.input.checked,
+        title: title.input.checked,
+        conversationId: conversationId.input.checked,
+        imageMode: provider === 'ChatGPT' ? (imageChoices.find((input) => input.checked)?.value ?? prefs.imageMode) : prefs.imageMode,
+      };
       savePrefs(chosen);
       close();
-      exportCurrentConversation(button, chosen);
+      exportCurrentConversation(button, chosen, provider);
     });
     exportButton.focus();
   }
@@ -1936,11 +2059,26 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
       const raw = provider === 'Claude' ? await fetchClaudeConversation(conversationId) : await fetchConversation(conversationId);
       showStatus('Formatting messages…');
       const normalized = provider === 'Claude' ? normalizeClaudeConversation(raw, conversationId) : normalizeConversation(raw);
+      let selectedImageIndices = null;
+      let includeImages = true;
+      if (provider === 'ChatGPT') {
+        includeImages = prefs.imageMode !== 'none';
+        if (prefs.imageMode === 'choose') {
+          showStatus('Choose images…', 'Review the available images before any image downloads begin.');
+          selectedImageIndices = await showImageSelection(normalized);
+          if (selectedImageIndices === null) {
+            showStatus('Export cancelled');
+            return;
+          }
+        }
+      }
       const conversation = provider === 'Claude'
         ? normalized
         : await resolveConversationImages(normalized, {
           conversationId,
-          onProgress: (completed, total) => showStatus('Resolving images…', `${completed}/${total} image asset(s)`),
+          includeImages,
+          selectedImageIndices,
+          onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
         });
       const exportStats = deriveExportStats(conversation.messages, conversation.stats, { model: conversation.model });
       const exportableConversation = { ...conversation, stats: exportStats };

@@ -2,6 +2,18 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.4.0] — 2026-08-22
+
+### Added
+
+Image asset pointers in conversation message parts are now recognized and rendered as image blocks. The exporter resolves supported images through the authenticated same-origin ChatGPT file metadata and signed content endpoints, embeds successful responses as `data:` URLs, and keeps the offline HTML self-contained.
+
+Image resolution is deduplicated by asset pointer and limited to image MIME types with a 3 MiB per-image byte cap. Expired, inaccessible, oversized, malformed, or unsupported assets are represented by explicit `[image unavailable: ...]` markers and summarized in the HTML header; they are not silently omitted. Asset pointers and signed URLs are not written to the export.
+
+### Privacy and reliability
+
+The image path makes no third-party requests and does not add telemetry, persistence, or credential output. The resolver uses the existing in-memory authentication context and the existing request timeout/allowlisting model. The live browser acceptance pass remains user-owned because image availability depends on the signed-in ChatGPT session and asset lifetime.
+
 ## [0.3.3] — 2026-08-22
 
 ### Fixed

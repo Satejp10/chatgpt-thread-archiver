@@ -7,6 +7,7 @@ const load = async (name) => JSON.parse(await readFile(new URL(`./fixtures/${nam
 const clientSource = await readFile(new URL('./src/chatgpt-client.mjs', import.meta.url), 'utf8');
 const coreSource = await readFile(new URL('./src/core.mjs', import.meta.url), 'utf8');
 const uiSource = await readFile(new URL('./src/exporter-ui.js', import.meta.url), 'utf8');
+const assetsSource = await readFile(new URL('./src/chatgpt-assets.mjs', import.meta.url), 'utf8');
 const buildSource = await readFile(new URL('./build.mjs', import.meta.url), 'utf8');
 
 const simple = normalizeConversation(await load('simple-conversation.json'));
@@ -34,8 +35,8 @@ assert.match(simpleHtml, /class="copy-btn"/);
 assert.match(simpleHtml, /querySelector\("\.content"\)/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.3\.3"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.3\.3/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.4\.0"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.4\.0/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -84,6 +85,25 @@ const jsonTool = normalizeConversation({ title: 'JSON tool', mapping: { root: { 
 const jsonToolHtml = renderConversationHtml(jsonTool, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(jsonToolHtml, /data-language="json"/);
 assert.match(jsonToolHtml, /&quot;path&quot;: &quot;\/tmp\/report&quot;/);
+
+const imageConversation = normalizeConversation(await load('image-conversation.json'));
+assert.equal(imageConversation.messages[0].textBlocks[0].type, 'image');
+assert.equal(imageConversation.messages[0].textBlocks[0].asset.width, 2);
+const embeddedImage = imageConversation.messages[0].textBlocks[0];
+embeddedImage.asset = { ...embeddedImage.asset, status: 'embedded', dataUrl: 'data:image/png;base64,iVBORw0KGgo=', byteLength: 8 };
+const embeddedImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
+assert.match(embeddedImageHtml, /class="image-block"/);
+assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
+assert.match(embeddedImageHtml, /Images: 1 embedded, 0 unavailable/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.4\.0/);
+embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
+const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
+assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
+assert.match(assetsSource, /MAX_IMAGE_BYTES = 3 \* 1024 \* 1024/);
+assert.match(assetsSource, /\/backend-api\/files\/download/);
+assert.match(assetsSource, /\/backend-api\/estuary\/content/);
+assert.match(assetsSource, /conversation_id=/);
+assert.match(assetsSource, /data:\$\{mime\};base64/);
 
 const blocks = textToBlocks('before\n\n```python\nprint("ok")\n```\n\nafter');
 assert.equal(blocks.length, 3);
@@ -159,7 +179,9 @@ assert.match(uiSource, /function migratePrefsOnce/);
 assert.match(uiSource, /localStorage\.removeItem\(LEGACY_PREF_KEY\)/);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.3\.3/);
+assert.match(buildSource, /@version      0\.4\.0/);
+assert.match(buildSource, /source\('chatgpt-assets\.mjs'\)/);
+assert.match(buildSource, /\$\{assets\}/);
 
 assert.throws(() => normalizeConversation({ title: 'No messages' }), ConversationShapeError);
 

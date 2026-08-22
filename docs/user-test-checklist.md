@@ -25,7 +25,7 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Light appearance | Open the file on a device using a dark OS theme | The archive remains light and its controls/scrollbars do not switch to a mismatched dark scheme |
 | Line spacing | Export content with several paragraphs and explicit line breaks | Each line/paragraph has normal spacing; no doubled blank gaps appear |
 | Code blocks | Export fenced code with multiple lines | Code preserves its whitespace, remains dark/styled, and scrolls horizontally when needed |
-| Provenance | Inspect the HTML head and footer | Generator metadata and footer identify `chatgpt-thread-archiver 0.3.0` |
+| Provenance | Inspect the HTML head and footer | Generator metadata and footer identify `chatgpt-thread-archiver 0.4.0` |
 | Prompt rail | Export a conversation with multiple user prompts | A right-edge rail contains one tick/link per user prompt and links to the correct message |
 | Prompt labels | Include a long prompt and a prompt consisting only of a fenced code block | The long label is collapsed with an ellipsis; code-only prompt becomes `Untitled prompt` |
 | Tooltip | Hover or focus a rail tick | A readable label appears to the left of the rail and is not clipped |
@@ -39,9 +39,12 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Formatting | Include paragraphs, explicit line breaks, bold/italic text, inline code, and fenced code | Formatting is rendered conservatively; code remains intact and horizontally scrollable if needed |
 | Special characters | Include `<`, `>`, `&`, quotes, Unicode, right-to-left text, and `<script>alert(1)</script>` | Characters display literally; no markup or script executes in the body, rail, or tooltip |
 | Regeneration | Export a chat with a regenerated assistant response | Only the active current branch is exported; alternate branches are not duplicated |
-| Unsupported content | Export a conversation containing an image, file, citation, or tool artifact | Text exports, an omission marker is visible, and the omission count is reported |
+| Image embedding | Export a conversation containing an uploaded or generated image that is still available | The HTML contains a visible image, the header reports it as embedded, and the image remains visible after opening the file offline |
+| Image fallback | Export a conversation containing an expired, inaccessible, oversized, or unsupported image asset | The export completes with an explicit `[image unavailable: ...]` marker and the header reports the unavailable count; the asset is not silently omitted |
+| Image privacy boundary | Inspect the exported HTML and Network panel during image export | No third-party requests occur; signed URLs, asset pointers, tokens, and cookies are absent from the exported HTML and diagnostics |
+| Unsupported content | Export a conversation containing a file, citation, canvas, or other non-image tool artifact | Text exports, an omission marker is visible, and the omission count is reported |
 | Mobile width | Open the exported file below 700 px viewport width | The rail is hidden and the transcript uses the full available width |
-| Offline output | Open the downloaded HTML with network access disabled or DevTools Network visible | The file remains readable and issues zero network requests |
+| Offline output | Open the downloaded HTML with network access disabled or DevTools Network visible | The file remains readable, embedded images remain visible, and it issues zero network requests |
 
 ## Failure report template
 

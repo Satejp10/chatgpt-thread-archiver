@@ -59,20 +59,31 @@ async function readJsonResponse(response) {
   }
 }
 
-function candidateDownloadUrl(value) {
-  if (!value || typeof value !== 'object') return null;
-  const urls = [value.download_url, value.url, value.downloadUrl]
-    .filter((item) => typeof item === 'string' && item.trim());
-  for (const raw of urls) {
-    const allowed = allowedAssetUrl(raw);
-    if (allowed) return allowed;
+export function candidateDownloadUrl(value) {
+  const queue = [{ value, depth: 0 }];
+  const seen = new Set();
+  const preferredKeys = new Set(['download_url', 'downloadUrl', 'url', 'file_url', 'content_url', 'image_url', 'thumbnail_url', 'asset_pointer_link', 'watermarked_asset_pointer']);
+  let inspected = 0;
+  while (queue.length && inspected < 64) {
+    const current = queue.shift();
+    const item = current.value;
+    if (!item || typeof item !== 'object' || seen.has(item)) continue;
+    seen.add(item);
+    inspected += 1;
+    for (const [key, raw] of Object.entries(item)) {
+      if (typeof raw === 'string' && raw.trim() && (preferredKeys.has(key) || raw.includes('/backend-api/estuary/content'))) {
+        const allowed = allowedAssetUrl(raw);
+        if (allowed) return allowed;
+      }
+      if (current.depth < 4 && raw && typeof raw === 'object') queue.push({ value: raw, depth: current.depth + 1 });
+    }
   }
   return null;
 }
 
 function bytesToDataUrl(bytes, mime) {
   let binary = '';
-  const chunkSize = 0x8000;
+  const chunkSize = 0x2000;
   for (let offset = 0; offset < bytes.length; offset += chunkSize) {
     binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length)));
   }
@@ -135,7 +146,7 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
     const metadata = await readJsonResponse(response);
     const downloadUrl = candidateDownloadUrl(metadata);
     if (!downloadUrl) {
-      lastReason = 'asset metadata did not contain a same-origin estuary download URL';
+      lastReason = 'asset metadata had no approved same-origin estuary image URL';
       continue;
     }
     const result = await fetchImageBytes(fetchImpl, downloadUrl, auth.headers, timeoutMs);

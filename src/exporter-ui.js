@@ -249,6 +249,10 @@
   function boot() {
     if (!document.body) return window.setTimeout(boot, 50);
     install();
+    if (window.MutationObserver && document.documentElement) {
+      const observer = new MutationObserver(() => install());
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+    }
   }
 
   boot();

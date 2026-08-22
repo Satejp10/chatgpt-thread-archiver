@@ -2,6 +2,28 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.5.0] — 2026-08-22
+
+### Fixed
+
+Structured JSON payloads with a readable `content`, `text`, `output`, `result`, or `message` field now retain all additional fields in a JSON code block instead of silently discarding them. Tool line markers are now parsed with the intended whitespace expression, and escaped-text fallback decoding handles literal backslash sequences in one pass.
+
+Non-image attachments now produce explicit omission markers and are included in omission counts. Mapping normalization now surfaces dropped and duplicate nodes in the exported header, chooses fallback leaves by actual childlessness and chronology, and labels messages marked `is_visually_hidden_from_conversation` while retaining their content unchanged.
+
+Generated `<time>` elements now use valid ISO 8601 `datetime` values. Filename sanitization protects Windows device names. The exporter control is reinstalled after SPA DOM rerenders, and image data-URL conversion uses smaller chunks. Image byte usage is shown in the export header.
+
+### Privacy
+
+This release does not redact exported conversation text. Hidden-by-ChatGPT messages remain included but are visibly labeled and counted so users can decide whether to share the file. The bearer-token lifecycle remains unchanged pending a separate compatibility/security review because workspace/account headers may still be required by the current ChatGPT request path.
+
+## [0.4.2] — 2026-08-22
+
+### Fixed
+
+The image metadata parser now scans bounded nested response values for approved `/backend-api/estuary/content` URLs, instead of depending only on a small set of top-level property names. This addresses valid image metadata whose download URL is nested differently across image types or ChatGPT response variants.
+
+The parser remains restricted to the current page origin and the estuary content path. It does not follow arbitrary URLs, expand the 3 MiB limit, or expose signed URLs in exports or diagnostics.
+
 ## [0.4.1] — 2026-08-22
 
 ### Fixed

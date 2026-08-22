@@ -1,0 +1,14 @@
+{
+  "conversation_id": "33333333-3333-4333-8333-333333333333",
+  "title": "Long message-array test chat",
+  "messages": [
+    { "id": "m1", "author": { "role": "user" }, "content": { "parts": ["Message 1: start"] } },
+    { "id": "m2", "author": { "role": "assistant" }, "content": { "parts": ["Message 2: response"] } },
+    { "id": "m3", "author": { "role": "user" }, "content": { "parts": ["Message 3: a multiline prompt\nwith a second line"] } },
+    { "id": "m4", "author": { "role": "assistant" }, "content": { "parts": ["Message 4: response"] } },
+    { "id": "m5", "author": { "role": "user" }, "content": { "parts": ["Message 5: special characters <tag> & \"quotes\""] } },
+    { "id": "m6", "author": { "role": "assistant" }, "content": { "parts": ["Message 6: response"] } },
+    { "id": "m7", "author": { "role": "user" }, "content": { "parts": ["Message 7: response request"] } },
+    { "id": "m8", "author": { "role": "assistant" }, "content": { "parts": ["Message 8: final answer"] } }
+  ]
+}

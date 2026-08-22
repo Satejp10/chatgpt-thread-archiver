@@ -1,0 +1,38 @@
+{
+  "conversation_id": "22222222-2222-4222-8222-222222222222",
+  "title": "Branching test chat",
+  "mapping": {
+    "root": { "id": "root", "parent": null, "children": ["u1"], "message": null },
+    "u1": {
+      "id": "u1",
+      "parent": "root",
+      "children": ["a1", "a2"],
+      "message": {
+        "id": "u1",
+        "author": { "role": "user" },
+        "content": { "content_type": "text", "parts": ["Give me two answers."] }
+      }
+    },
+    "a1": {
+      "id": "a1",
+      "parent": "u1",
+      "children": [],
+      "message": {
+        "id": "a1",
+        "author": { "role": "assistant" },
+        "content": { "content_type": "text", "parts": ["First answer"] }
+      }
+    },
+    "a2": {
+      "id": "a2",
+      "parent": "u1",
+      "children": [],
+      "message": {
+        "id": "a2",
+        "author": { "role": "assistant" },
+        "content": { "content_type": "text", "parts": ["Second answer"] }
+      }
+    }
+  },
+  "current_node": "a2"
+}

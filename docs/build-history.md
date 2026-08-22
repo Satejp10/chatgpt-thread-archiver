@@ -41,12 +41,13 @@ The build output is generated from `src/` by `build.mjs`. Do not edit `dist/chat
 cp -f dist/chatgpt-chats-exporter.user.js chatgpt-chats-exporter.user.js
 ```
 
-The current bundling order is important. `build.mjs` concatenates `src/core.mjs`, `src/chatgpt-client.mjs`, `src/chatgpt-assets.mjs`, and `src/exporter-ui.js` into one userscript IIFE. The asset module relies on helper functions defined earlier in the concatenated client module.
+The current bundling order is important. `build.mjs` concatenates `src/core.mjs`, `src/chatgpt-client.mjs`, `src/claude-client.mjs`, `src/chatgpt-assets.mjs`, and `src/exporter-ui.js` into one userscript IIFE. The asset module relies on helper functions defined earlier in the concatenated client module.
 
 ## Release milestones
 
 | Release | Main purpose | Validation status | Release state |
 |---|---|---|---|
+| `v0.6.0` | Basic Claude.ai text export, shared model display, provider-scoped activation | Local build/check completed; live Claude testing remains | Candidate on feature branch |
 | `v0.1.0` | API-based conversation exporter MVP | Local build/check completed during initial implementation | Historical |
 | `v0.2.0` | Legacy-style UI, prompt rail, copy controls, privacy preferences, security hardening | Local build/check completed | Historical |
 | `v0.3.0` | Thread Archiver rename, preference migration, bounded JSON handling, rail fixes | Local build/check completed | Historical |
@@ -58,6 +59,20 @@ The current bundling order is important. `build.mjs` concatenates `src/core.mjs`
 | `v0.4.2` | Bounded nested signed-URL discovery for image metadata | Local build/check completed | Historical |
 | `v0.5.0` | Audit remediation: structured-field preservation, attachment markers, coverage reporting, hidden-message labels, ISO timestamps, branch fallback, filename hardening, SPA recovery, image budgets | Local build/check completed | Historical remediation release |
 | `v0.5.1` | Restrict activation to `/c/*` and `/s/*`; lift mobile controls above the composer/send area | Local build/check completed; live testing owned by the user | **Current stable release** |
+
+## Validation record for v0.6.0 candidate
+
+The v0.6.0 candidate was built and checked on 2026-08-22 on the `claude-basic-v0.6` feature branch after adding the Claude text adapter and synchronizing the root and `dist/` artifacts:
+
+| Check | Result |
+|---|---|
+| `npm run build` | Passed; generated userscript written to `dist/` |
+| `npm run check` | Passed; all ChatGPT and Claude fixture/regression checks passed |
+| `node --check dist/chatgpt-chats-exporter.user.js` | Passed |
+| Root/dist byte comparison | Passed |
+| Live Claude browser acceptance | Pending product-owner testing |
+
+The candidate is not the stable release until live Claude testing and the normal pull-request review/merge process are complete.
 
 ## Validation record for v0.5.1
 
@@ -72,7 +87,7 @@ The v0.5.1 patch release was built and checked on 2026-08-22 after synchronizing
 | GitHub pull request | PR #6 merged into `main` |
 | Remote branch cleanup | Feature branch removed; stable remote branch is `main` |
 
-Local checks prove deterministic parsing, rendering, bundling, and syntax. They cannot prove that ChatGPT’s live internal endpoints, session responses, image assets, or mobile layout remain unchanged. Live browser and offline-file acceptance remains the product owner’s responsibility.
+Local checks prove deterministic parsing, rendering, bundling, and syntax. They cannot prove that ChatGPT’s or Claude.ai’s live internal endpoints, session responses, image assets, organization context, or mobile layout remain unchanged. Live browser and offline-file acceptance remains the product owner’s responsibility.
 
 ## GitHub release workflow
 

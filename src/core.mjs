@@ -1,3 +1,4 @@
+const ARCHIVER_VERSION = '0.6.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -342,6 +343,7 @@ export function normalizeConversation(raw) {
   return {
     title,
     conversationId,
+    provider: 'ChatGPT',
     sourceShape,
     activeBranch,
     messages: uniqueMessages,
@@ -449,10 +451,10 @@ function messagePlainText(message) {
   return (message.textBlocks ?? []).filter((block) => block.type === 'text' || block.type === 'code').map((block) => block.text ?? '').join('\n');
 }
 
-function roleCounts(messages) {
+function roleCounts(messages, provider = 'ChatGPT') {
   const counts = new Map();
   for (const message of messages) counts.set(message.role, (counts.get(message.role) ?? 0) + 1);
-  return [...counts.entries()].map(([role, count]) => `${count} ${ROLE_LABELS[role] ?? role}`).join(', ');
+  return [...counts.entries()].map(([role, count]) => `${count} ${role === 'assistant' ? provider : (ROLE_LABELS[role] ?? role)}`).join(', ');
 }
 
 function railLabel(text) {
@@ -557,6 +559,7 @@ const EXPORT_JS = [
 ].join('\n');
 
 export function renderConversationHtml(conversation, { exportedAt = new Date().toISOString(), sourceUrl = null, includeConversationId = false, includeTitle = true } = {}) {
+  const provider = typeof conversation.provider === 'string' && conversation.provider.trim() ? conversation.provider.trim() : 'ChatGPT';
   const railItems = [];
   const messagesHtml = conversation.messages.map((message, index) => {
     const id = `m-${String(index + 1).padStart(4, '0')}`;
@@ -572,12 +575,13 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
     return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}${hiddenClass}" id="${id}" data-message-index="${index + 1}" data-message-id="${escapeAttribute(message.id)}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${timestamp ? `<span class="msg-time"><time${datetime}>${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
   }).join('\n');
 
-  const branchNote = conversation.activeBranch ? 'Active conversation branch exported.' : 'Message-array conversation exported.';
-  const rawTitle = includeTitle ? conversation.title : 'ChatGPT conversation';
+  const branchNote = conversation.activeBranch ? `Active ${provider} conversation branch exported.` : `${provider} message array exported.`;
+  const rawTitle = includeTitle ? conversation.title : `${provider} conversation`;
   const title = escapeHtml(rawTitle);
   const idMeta = includeConversationId && conversation.conversationId ? `<meta name="conversation-id" content="${escapeAttribute(conversation.conversationId)}">` : '';
   const sourceBlock = sourceUrl ? `<p class="meta">Source: <a href="${escapeAttribute(sourceUrl)}" rel="noopener noreferrer">${escapeHtml(sourceUrl)}</a></p>` : '';
-  const metadata = `<p class="meta">Exported ${escapeHtml(exportedAt)} · ${conversation.stats.messageCount} message${conversation.stats.messageCount === 1 ? '' : 's'} (${escapeHtml(roleCounts(conversation.messages))})</p>`;
+  const metadata = `<p class="meta">Exported ${escapeHtml(exportedAt)} · ${conversation.stats.messageCount} message${conversation.stats.messageCount === 1 ? '' : 's'} (${escapeHtml(roleCounts(conversation.messages, provider))})</p>`;
+  const modelLine = typeof conversation.model === 'string' && conversation.model.trim() ? `<p class="meta">Model: ${escapeHtml(conversation.model)}</p>` : '';
   const omissionLine = conversation.stats.omittedBlockCount > 0
     ? `<p class="meta flag-warn">${conversation.stats.omittedBlockCount} omitted non-text block${conversation.stats.omittedBlockCount === 1 ? '' : 's'}</p>`
     : '<p class="meta flag-ok">Text blocks complete</p>';
@@ -595,7 +599,7 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="generator" content="chatgpt-thread-archiver 0.5.1">
+<meta name="generator" content="chatgpt-thread-archiver ${ARCHIVER_VERSION}">
 <meta name="exported-at" content="${escapeAttribute(exportedAt)}">
 ${idMeta}
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'">
@@ -607,9 +611,10 @@ ${idMeta}
 <nav id="rail" aria-label="Prompts"><h2>Prompts</h2><ol>${railItems.join('')}</ol></nav>
 <div class="wrap">
 <header class="export-head">
-<h1>${title}</h1>
-${metadata}
-${sourceBlock}
+  <h1>${title}</h1>
+  ${metadata}
+  ${modelLine}
+  ${sourceBlock}
   ${omissionLine}
   ${imageLine}
   ${coverageLine}
@@ -619,7 +624,7 @@ ${sourceBlock}
 <section aria-label="Conversation messages">
 ${messagesHtml}
 </section>
-<footer class="export-footer">${escapeHtml(branchNote)} Generated locally by chatgpt-thread-archiver 0.5.1. This file was generated locally and is designed to work offline.</footer>
+<footer class="export-footer">${escapeHtml(branchNote)} Generated locally by chatgpt-thread-archiver ${ARCHIVER_VERSION}. This file was generated locally and is designed to work offline.</footer>
 </main>
 </div>
 <script>${EXPORT_JS}</script>

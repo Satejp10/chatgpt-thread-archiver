@@ -6,11 +6,11 @@ All notable changes to **ChatGPT Thread Archiver** are documented here. Exported
 
 ### Fixed
 
-Structured JSON payloads with a readable `content`, `text`, `output`, `result`, or `message` field now retain all additional fields in a JSON code block instead of silently discarding them. Tool line markers are now parsed with the intended whitespace expression, and escaped-text fallback decoding handles literal backslash sequences in one pass.
+Structured JSON payloads with a readable `content`, `text`, `output`, `result`, or `message` field now retain all additional fields in a JSON code block instead of silently discarding them. Tool line markers are now parsed with the intended whitespace expression. Ordinary user and assistant text is no longer JSON-decoded; decoding is restricted to structured tool payloads and explicit tool line markers, preserving literal backslash sequences in normal text.
 
-Non-image attachments now produce explicit omission markers and are included in omission counts. Mapping normalization now surfaces dropped and duplicate nodes in the exported header, chooses fallback leaves by actual childlessness and chronology, and labels messages marked `is_visually_hidden_from_conversation` while retaining their content unchanged.
+When both `content.parts` and `content.content` are present, the non-empty `content.parts` collection takes precedence and repeated values are deduplicated. Non-image attachments now produce explicit omission markers and are included in omission counts. Mapping normalization now surfaces dropped and duplicate nodes in the exported header, chooses fallback leaves by actual childlessness and chronology, and labels messages marked `is_visually_hidden_from_conversation` while retaining their content unchanged.
 
-Generated `<time>` elements now use valid ISO 8601 `datetime` values. Filename sanitization protects Windows device names. The exporter control is reinstalled after SPA DOM rerenders, and image data-URL conversion uses smaller chunks. Image byte usage is shown in the export header.
+Generated `<time>` elements now use valid ISO 8601 `datetime` values. Filename sanitization protects Windows device names. The exporter control is reinstalled after SPA DOM rerenders, and image data-URL conversion uses smaller chunks. Image embedding retains the 3 MiB per-image limit and adds 12 MiB total and 64-image export budgets, with explicit budget diagnostics. Image byte usage is shown in the export header. The root userscript is synchronized with the canonical `dist/` artifact.
 
 ### Privacy
 

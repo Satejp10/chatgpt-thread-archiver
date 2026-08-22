@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { normalizeConversation, renderConversationHtml, sanitizeFilename, textToBlocks, ConversationShapeError } from './src/core.mjs';
 import { ChatGPTClientError, clearAccessTokenCache, describeClientError, endpointCandidates, getAuthContext, getConversationIdFromUrl, parseConversationRoute } from './src/chatgpt-client.mjs';
-import { candidateDownloadUrl } from './src/chatgpt-assets.mjs';
+import { applyImageBudget, candidateDownloadUrl, IMAGE_LIMITS } from './src/chatgpt-assets.mjs';
 
 const load = async (name) => JSON.parse(await readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
 const clientSource = await readFile(new URL('./src/chatgpt-client.mjs', import.meta.url), 'utf8');
@@ -87,7 +87,7 @@ const jsonToolHtml = renderConversationHtml(jsonTool, { exportedAt: '2026-08-15T
 assert.match(jsonToolHtml, /data-language="json"/);
 assert.match(jsonToolHtml, /&quot;path&quot;: &quot;\/tmp\/report&quot;/);
 
-const pastedJson = normalizeConversation({ title: 'Pasted JSON', mapping: { root: { parent: null, children: ['pasted'] }, pasted: { parent: 'root', children: [], message: { id: 'pasted', author: { role: 'user' }, content: { parts: ['{\\"message\\":\\"hi\\\\nthere\\",\\"id\\":42,\\"secret\\":\\"keep-me\\"}'] } } } }, current_node: 'pasted' });
+const pastedJson = normalizeConversation({ title: 'Pasted JSON', mapping: { root: { parent: null, children: ['pasted'] }, pasted: { parent: 'root', children: [], message: { id: 'pasted', author: { role: 'tool' }, content: { parts: ['{\\"message\\":\\"hi\\\\nthere\\",\\"id\\":42,\\"secret\\":\\"keep-me\\"}'] } } } }, current_node: 'pasted' });
 const pastedJsonHtml = renderConversationHtml(pastedJson);
 assert.match(pastedJsonHtml, /hi<br>there/);
 assert.match(pastedJsonHtml, /&quot;id&quot;: 42/);
@@ -111,6 +111,18 @@ assert.deepEqual(chronologicalFallback.messages.map((message) => message.id), ['
 const timestampConversation = normalizeConversation({ title: 'Timestamp', mapping: { root: { parent: null, children: ['timestamp'] }, timestamp: { parent: 'root', children: [], message: { id: 'timestamp', author: { role: 'user' }, create_time: '1755.0', content: { parts: ['time'] } } } }, current_node: 'timestamp' });
 assert.match(renderConversationHtml(timestampConversation), /datetime="1970-01-01T00:29:15\.000Z"/);
 
+const duplicateParts = normalizeConversation({ title: 'Duplicate parts', mapping: { root: { parent: null, children: ['duplicate'], message: null }, duplicate: { parent: 'root', children: [], message: { id: 'duplicate', author: { role: 'user' }, content: { parts: [{ type: 'text', text: 'preferred' }], content: [{ type: 'text', text: 'preferred' }, { type: 'text', text: 'fallback-only' }] } } } }, current_node: 'duplicate' });
+assert.deepEqual(duplicateParts.messages[0].textBlocks.map((block) => block.text), ['preferred']);
+
+const literalEscapes = normalizeConversation({ title: 'Literal escapes', mapping: { root: { parent: null, children: ['literal'], message: null }, literal: { parent: 'root', children: [], message: { id: 'literal', author: { role: 'user' }, content: { parts: ['literal \\n \\t \\u0041 C:\\\\temp\\\\file regex \\d+'] } } } }, current_node: 'literal' });
+assert.equal(literalEscapes.messages[0].textBlocks[0].text, 'literal \\n \\t \\u0041 C:\\\\temp\\\\file regex \\d+');
+
+assert.deepEqual(IMAGE_LIMITS, { perImageBytes: 3 * 1024 * 1024, totalBytes: 12 * 1024 * 1024, embeddedImageCount: 64 });
+const embeddedResult = { status: 'embedded', byteLength: 8, dataUrl: 'data:image/png;base64,AA==' };
+assert.equal(applyImageBudget(embeddedResult, { embeddedCount: 0, imageBytes: IMAGE_LIMITS.totalBytes - 8 }).status, 'embedded');
+assert.equal(applyImageBudget({ ...embeddedResult, byteLength: 9 }, { embeddedCount: 0, imageBytes: IMAGE_LIMITS.totalBytes - 8 }).reason, 'export exceeds the 12 MiB total embedded image budget');
+assert.equal(applyImageBudget(embeddedResult, { embeddedCount: IMAGE_LIMITS.embeddedImageCount, imageBytes: 0 }).reason, 'export exceeds the 64 embedded-image limit');
+
 const imageConversation = normalizeConversation(await load('image-conversation.json'));
 assert.equal(imageConversation.messages[0].textBlocks[0].type, 'image');
 assert.equal(imageConversation.messages[0].textBlocks[0].asset.width, 2);
@@ -125,7 +137,10 @@ assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
-assert.match(assetsSource, /MAX_IMAGE_BYTES = 3 \* 1024 \* 1024/);
+assert.match(assetsSource, /perImageBytes: 3 \* 1024 \* 1024/);
+assert.match(assetsSource, /totalBytes: 12 \* 1024 \* 1024/);
+assert.match(assetsSource, /embeddedImageCount: 64/);
+assert.match(assetsSource, /applyImageBudget/);
 assert.match(assetsSource, /\/backend-api\/files\/download/);
 assert.match(assetsSource, /\/backend-api\/estuary\/content/);
 assert.match(assetsSource, /conversation_id=/);

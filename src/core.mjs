@@ -43,23 +43,14 @@ function labelForRole(role) {
   return ROLE_LABELS[role] ?? (role ? role[0].toUpperCase() + role.slice(1) : 'Unknown');
 }
 
-function decodeEscapedText(value) {
+function decodeEscapedText(value, { encodedPayload = false } = {}) {
   const text = String(value ?? '');
-  if (!/\\(?:n|r|t|u[0-9a-f]{4}|["\\])/.test(text)) return text;
+  if (!encodedPayload || !/\\(?:n|r|t|u[0-9a-f]{4}|["\\])/.test(text)) return text;
   try {
     const decoded = JSON.parse(`"${text}"`);
     return typeof decoded === 'string' ? decoded : text;
   } catch {
-    return text.replace(/\\\\|\\r\\n|\\n|\\r|\\t|\\u([0-9a-f]{4})|\\(["\\])/gi, (match, hex, quote) => {
-      if (match === '\\\\') return '\\';
-      if (hex) return String.fromCharCode(parseInt(hex, 16));
-      if (quote) return quote;
-      if (match === '\\r\\n') return '\n';
-      if (match === '\\n') return '\n';
-      if (match === '\\r') return '\r';
-      if (match === '\\t') return '\t';
-      return match;
-    });
+    return text;
   }
 }
 
@@ -67,13 +58,21 @@ function stripToolLineMarkers(text) {
   return String(text ?? '').replace(/^\s*\[L\d+\]\s?/gm, '');
 }
 
-function parseStructuredToolText(text) {
-  const candidate = stripToolLineMarkers(decodeEscapedText(text)).trim();
-  if (!candidate || !/^[\[{]/.test(candidate)) return null;
+function parseStructuredToolText(text, { encodedPayload = false } = {}) {
+  const raw = String(text ?? '');
+  const rawCandidate = stripToolLineMarkers(raw).trim();
+  if (!rawCandidate || !/^[\[{]/.test(rawCandidate)) return null;
   try {
-    return JSON.parse(candidate);
+    return JSON.parse(rawCandidate);
   } catch {
-    return null;
+    if (!encodedPayload) return null;
+    const decodedCandidate = stripToolLineMarkers(decodeEscapedText(raw, { encodedPayload: true })).trim();
+    if (!decodedCandidate || decodedCandidate === rawCandidate) return null;
+    try {
+      return JSON.parse(decodedCandidate);
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -82,7 +81,7 @@ const STRUCTURED_TEXT_KEYS = ['content', 'text', 'output', 'result', 'message'];
 function structuredReadableEntry(value) {
   if (!isPlainObject(value)) return null;
   for (const key of STRUCTURED_TEXT_KEYS) {
-    if (typeof value[key] === 'string' && value[key].trim()) return { key, text: decodeEscapedText(value[key]) };
+    if (typeof value[key] === 'string' && value[key].trim()) return { key, text: value[key] };
   }
   return null;
 }
@@ -99,12 +98,12 @@ function structuredRemainder(value) {
 }
 
 function formatToolTranscript(text) {
-  const decoded = decodeEscapedText(text);
-  return decoded.split('\n').map((line) => {
+  return String(text ?? '').split('\n').map((line) => {
     const marker = line.match(/^\s*\[L\d+\]\s*(.*)$/);
     if (!marker) return line;
-    const parsed = parseStructuredToolText(marker[1]);
-    if (parsed === null) return marker[1];
+    const payload = decodeEscapedText(marker[1], { encodedPayload: true });
+    const parsed = parseStructuredToolText(payload, { encodedPayload: true });
+    if (parsed === null) return payload;
     const readable = structuredReadableText(parsed);
     const remainder = structuredRemainder(parsed);
     if (readable && remainder) return `${readable}\n\n[additional structured fields]\n${JSON.stringify(remainder, null, 2)}`;
@@ -114,12 +113,10 @@ function formatToolTranscript(text) {
 
 function displayTextItems(text, role, kind, language = '') {
   const rawText = String(text ?? '');
-  const toolLike = ['tool', 'function', 'computer'].includes(role)
-    || /^\s*\[L\d+\]/m.test(rawText)
-    || /\\(?:n|r|t|u[0-9a-f]{4}|\"|\\)/.test(rawText);
+  const toolLike = ['tool', 'function', 'computer'].includes(role) || /^\s*\[L\d+\]/m.test(rawText);
   if (!toolLike) return [{ kind, text: rawText, language }];
 
-  const parsed = parseStructuredToolText(rawText);
+  const parsed = parseStructuredToolText(rawText, { encodedPayload: true });
   if (parsed !== null) {
     const readable = structuredReadableText(parsed);
     if (readable !== null) {
@@ -136,22 +133,36 @@ function displayTextItems(text, role, kind, language = '') {
 function contentCandidates(message) {
   const content = message?.content;
   const candidates = [];
-  if (typeof content === 'string') {
-    candidates.push({ kind: 'text', value: content });
-  } else if (isPlainObject(content)) {
-    const parts = Array.isArray(content.parts) ? content.parts : null;
-    if (parts) {
-      for (const part of parts) candidates.push({ kind: 'part', value: part });
+  const seen = new Set();
+  const add = (candidate) => {
+    let key;
+    try {
+      key = typeof candidate.value === 'string' ? `string:${candidate.value}` : `json:${JSON.stringify(candidate.value)}`;
+    } catch {
+      key = `object:${Object.prototype.toString.call(candidate.value)}`;
     }
-    if (typeof content.text === 'string') candidates.push({ kind: 'text', value: content.text });
-    if (typeof content.content === 'string') candidates.push({ kind: 'text', value: content.content });
-    if (Array.isArray(content.content)) {
-      for (const part of content.content) candidates.push({ kind: 'part', value: part });
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+  if (typeof content === 'string') {
+    add({ kind: 'text', value: content, source: 'content' });
+  } else if (isPlainObject(content)) {
+    const parts = Array.isArray(content.parts) ? content.parts : [];
+    const contentParts = Array.isArray(content.content) ? content.content : [];
+    if (parts.length > 0) {
+      for (const part of parts) add({ kind: 'part', value: part, source: 'parts' });
+    } else if (contentParts.length > 0) {
+      for (const part of contentParts) add({ kind: 'part', value: part, source: 'content' });
+    } else if (typeof content.content === 'string') {
+      add({ kind: 'text', value: content.content, source: 'content' });
+    } else if (typeof content.text === 'string') {
+      add({ kind: 'text', value: content.text, source: 'text' });
     }
   }
   const attachmentLists = [message?.metadata?.attachments, content?.metadata?.attachments].filter(Array.isArray);
   const attachments = [...new Set(attachmentLists.flat())];
-  for (const attachment of attachments) candidates.push({ kind: 'attachment', value: attachment });
+  for (const attachment of attachments) add({ kind: 'attachment', value: attachment });
   return candidates;
 }
 
@@ -571,7 +582,7 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
     ? `<p class="meta flag-warn">${conversation.stats.omittedBlockCount} omitted non-text block${conversation.stats.omittedBlockCount === 1 ? '' : 's'}</p>`
     : '<p class="meta flag-ok">Text blocks complete</p>';
   const imageLine = Number.isFinite(conversation.stats.imageCount) && conversation.stats.imageCount > 0
-    ? `<p class="meta">Images: ${conversation.stats.imageEmbeddedCount ?? 0} embedded, ${conversation.stats.imageUnavailableCount ?? 0} unavailable${Number(conversation.stats.imageBytes) > 0 ? ` · ${Math.ceil(Number(conversation.stats.imageBytes) / 1024)} KB embedded` : ''}</p>`
+    ? `<p class="meta">Images: ${conversation.stats.imageEmbeddedCount ?? 0} embedded, ${conversation.stats.imageUnavailableCount ?? 0} unavailable${conversation.stats.imageBudgetLimitedCount ? `; ${conversation.stats.imageBudgetLimitedCount} limited by export budget` : ''}${Number(conversation.stats.imageBytes) > 0 ? ` · ${Math.ceil(Number(conversation.stats.imageBytes) / 1024)} KB embedded` : ''}</p>`
     : '';
   const coverageLine = (conversation.stats.droppedNodeCount ?? 0) > 0 || (conversation.stats.duplicateMessageCount ?? 0) > 0
     ? `<p class="meta flag-warn">Coverage: ${conversation.stats.droppedNodeCount ?? 0} dropped node${conversation.stats.droppedNodeCount === 1 ? '' : 's'}, ${conversation.stats.duplicateMessageCount ?? 0} duplicate message${conversation.stats.duplicateMessageCount === 1 ? '' : 's'} removed</p>`

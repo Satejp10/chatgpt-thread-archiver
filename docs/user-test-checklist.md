@@ -44,6 +44,9 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Image privacy boundary | Inspect the exported HTML and Network panel during image export | No third-party requests occur; signed URLs, asset pointers, tokens, and cookies are absent from the exported HTML and diagnostics |
 | Unsupported content | Export a conversation containing a file, citation, canvas, or other non-image tool artifact | Text exports, an omission marker is visible, and the omission count is reported |
 | Structured JSON preservation | Include a tool-like or pasted JSON object with a readable field plus additional fields | The readable field is formatted as text and the additional fields remain visible in a JSON block |
+| Literal escape preservation | Include ordinary user text containing literal `\\n`, `\\t`, `\\uXXXX`, Windows paths, or regexes | The literal backslash sequences remain unchanged; only explicitly encoded tool payloads are decoded |
+| Content precedence | Use a response containing both `content.parts` and `content.content` | Non-empty `content.parts` wins and repeated part values are not emitted twice |
+| Image/export budget | Export more than 12 MiB of available images or more than 64 image blocks | The export completes, budget-limited images show explicit unavailable diagnostics, and the header/status reports the budget-limited count |
 | Coverage warning | Export a conversation with a malformed/dropped mapping node or duplicate message ID | The header reports the dropped or duplicate count instead of silently presenting an apparently complete archive |
 | Hidden-message label | Export a conversation containing a message marked hidden by ChatGPT | The content remains present, the message is visibly labeled as hidden by ChatGPT, and the header reports the count |
 | Mobile width | Open the exported file below 700 px viewport width | The rail is hidden and the transcript uses the full available width |

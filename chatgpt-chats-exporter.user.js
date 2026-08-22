@@ -3,8 +3,8 @@
 // @namespace    local.chatgpt-thread-archiver
 // @version      0.5.0
 // @description  Export the currently open ChatGPT conversation to self-contained HTML.
-// @match        https://chatgpt.com/*
-// @match        https://chat.openai.com/*
+// @match        https://chatgpt.com/c/*
+// @match        https://chatgpt.com/s/*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
@@ -707,6 +707,15 @@ function isChatGPTHost(locationLike = globalThis.location) {
   return host === 'chatgpt.com' || host === 'chat.openai.com';
 }
 
+function isExporterRoute(url = globalThis.location?.href ?? '') {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === 'chatgpt.com' && /^\/(?:c|s)\/.+/.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
 function redactId(id) {
   const value = String(id ?? '');
   if (!value) return '<missing>';
@@ -1321,6 +1330,10 @@ async function resolveConversationImages(conversation, { fetchImpl = globalThis.
     style.textContent = `
       #${CONTROL_ID} { position: fixed; right: 18px; bottom: 18px; z-index: 2147483647; border: 0; border-radius: 999px; padding: 10px 15px; background: #111827; color: white; box-shadow: 0 6px 22px rgb(0 0 0 / .2); font: 600 13px/1.2 system-ui, sans-serif; cursor: pointer; }
       #${CONTROL_ID}:hover { background: #1f2937; }
+      @media (max-width: 700px) {
+        #${CONTROL_ID} { right: 12px; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+        #${PANEL_ID} { right: 12px; bottom: calc(138px + env(safe-area-inset-bottom, 0px)); max-width: calc(100vw - 24px); }
+      }
       #${CONTROL_ID}[data-state="busy"] { opacity: .7; cursor: wait; }
       #${PANEL_ID} { position: fixed; right: 18px; bottom: 64px; z-index: 2147483647; max-width: min(420px, calc(100vw - 36px)); border: 1px solid rgb(156 163 175 / .45); border-radius: 12px; padding: 12px 14px; background: Canvas; color: CanvasText; box-shadow: 0 8px 30px rgb(0 0 0 / .2); font: 13px/1.45 system-ui, sans-serif; white-space: normal; }
       #${PANEL_ID}[hidden] { display: none; }
@@ -1541,7 +1554,7 @@ async function resolveConversationImages(conversation, { fetchImpl = globalThis.
   }
 
   function install() {
-    if (!isChatGPTHost()) return;
+    if (!isChatGPTHost() || !isExporterRoute()) return;
     if (!document.body || document.getElementById(CONTROL_ID)) return;
     installAuthCacheInvalidation();
     addStyles();

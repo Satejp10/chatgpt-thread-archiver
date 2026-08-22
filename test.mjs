@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { normalizeConversation, renderConversationHtml, sanitizeFilename, textToBlocks, ConversationShapeError } from './src/core.mjs';
-import { ChatGPTClientError, clearAccessTokenCache, describeClientError, endpointCandidates, getAuthContext, getConversationIdFromUrl, parseConversationRoute } from './src/chatgpt-client.mjs';
+import { ChatGPTClientError, clearAccessTokenCache, describeClientError, endpointCandidates, getAuthContext, getConversationIdFromUrl, isExporterRoute, parseConversationRoute } from './src/chatgpt-client.mjs';
 import { applyImageBudget, candidateDownloadUrl, IMAGE_LIMITS } from './src/chatgpt-assets.mjs';
 
 const load = async (name) => JSON.parse(await readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
@@ -176,6 +176,10 @@ assert.equal(getConversationIdFromUrl('https://chatgpt.com/'), null);
 assert.deepEqual(parseConversationRoute('https://chatgpt.com/c/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa').kind, 'conversation');
 assert.deepEqual(parseConversationRoute('https://chatgpt.com/share/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa').kind, 'share');
 assert.deepEqual(parseConversationRoute('https://chatgpt.com/images').kind, 'not-conversation');
+assert.equal(isExporterRoute('https://chatgpt.com/c/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), true);
+assert.equal(isExporterRoute('https://chatgpt.com/s/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), true);
+assert.equal(isExporterRoute('https://chatgpt.com/settings'), false);
+assert.equal(isExporterRoute('https://chat.openai.com/c/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), false);
 const validId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 assert.deepEqual(endpointCandidates(validId), [
   `/backend-api/conversation/${validId}`,
@@ -230,11 +234,16 @@ assert.match(uiSource, /const PREF_KEY = 'chatgpt-thread-archiver-prefs'/);
 assert.match(uiSource, /const LEGACY_PREF_KEY = 'chatgpt-chats-exporter-prefs'/);
 assert.match(uiSource, /function migratePrefsOnce/);
 assert.match(uiSource, /new MutationObserver\(\(\) => install\(\)\)/);
+assert.match(uiSource, /bottom: calc\(84px \+ env\(safe-area-inset-bottom/);
+assert.match(uiSource, /bottom: calc\(138px \+ env\(safe-area-inset-bottom/);
 assert.match(assetsSource, /const chunkSize = 0x2000/);
 assert.match(uiSource, /localStorage\.removeItem\(LEGACY_PREF_KEY\)/);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
 assert.match(buildSource, /@version      0\.5\.0/);
+assert.ok(buildSource.includes('// @match        https://chatgpt.com/c/*'));
+assert.ok(buildSource.includes('// @match        https://chatgpt.com/s/*'));
+assert.ok(!buildSource.includes('// @match        https://chatgpt.com/*'));
 assert.match(buildSource, /source\('chatgpt-assets\.mjs'\)/);
 assert.match(buildSource, /\$\{assets\}/);
 

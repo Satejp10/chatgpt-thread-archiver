@@ -16,8 +16,8 @@ const banner = `// ==UserScript==
 // @namespace    local.chatgpt-thread-archiver
 // @version      0.5.0
 // @description  Export the currently open ChatGPT conversation to self-contained HTML.
-// @match        https://chatgpt.com/*
-// @match        https://chat.openai.com/*
+// @match        https://chatgpt.com/c/*
+// @match        https://chatgpt.com/s/*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==

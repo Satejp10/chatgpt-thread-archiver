@@ -40,9 +40,9 @@ The generated HTML includes a right-edge prompt rail with one entry per user pro
 
 ## Run it in a browser
 
-Install the canonical bundled artifact `dist/chatgpt-chats-exporter.user.js` in Tampermonkey or Violentmonkey. The root `chatgpt-chats-exporter.user.js` is kept byte-identical to that generated artifact for repository browsing and direct download convenience. Because the 0.3.0 name and namespace changed to `ChatGPT Thread Archiver` and `local.chatgpt-thread-archiver`, delete the old userscript entry manually before reinstalling this build. The 0.5.0 image resolver is included in the generated bundle. Save the script, open or refresh a ChatGPT conversation while signed in, and use the floating **Export HTML** button.
+Install the canonical bundled artifact `dist/chatgpt-chats-exporter.user.js` in Tampermonkey or Violentmonkey. The root `chatgpt-chats-exporter.user.js` is kept byte-identical to that generated artifact for repository browsing and direct download convenience. The userscript activates only on `chatgpt.com/c/...` normal-chat and `chatgpt.com/s/...` shared-chat URL prefixes, which avoids injecting controls into unrelated ChatGPT pages. Because the 0.3.0 name and namespace changed to `ChatGPT Thread Archiver` and `local.chatgpt-thread-archiver`, delete the old userscript entry manually before reinstalling this build. The 0.5.0 image resolver is included in the generated bundle. Save the script, open or refresh a supported chat while signed in, and use the floating **Export HTML** button.
 
-The generated file can be opened offline. To verify the offline boundary, open the file with network access disabled or with the browser’s network panel visible and confirm that it remains readable without external assets. The CSP and static script remain unchanged by the visual port.
+The generated file can be opened offline. To verify the offline boundary, open the file with network access disabled or with the browser’s network panel visible and confirm that it remains readable without external assets. On narrow mobile screens, the export button and status panel are lifted above the composer/send area and account for the device safe-area inset. The CSP and static script remain unchanged by the visual port.
 
 ## Build and local checks
 

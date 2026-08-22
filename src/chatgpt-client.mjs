@@ -51,6 +51,15 @@ export function isChatGPTHost(locationLike = globalThis.location) {
   return host === 'chatgpt.com' || host === 'chat.openai.com';
 }
 
+export function isExporterRoute(url = globalThis.location?.href ?? '') {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === 'chatgpt.com' && /^\/(?:c|s)\/.+/.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
 function redactId(id) {
   const value = String(id ?? '');
   if (!value) return '<missing>';

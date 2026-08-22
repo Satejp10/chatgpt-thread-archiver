@@ -26,6 +26,7 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Line spacing | Export content with several paragraphs and explicit line breaks | Each line/paragraph has normal spacing; no doubled blank gaps appear |
 | Code blocks | Export fenced code with multiple lines | Code preserves its whitespace, remains dark/styled, and scrolls horizontally when needed |
 | Provenance | Inspect the HTML head and footer | Generator metadata and footer identify `chatgpt-thread-archiver 0.5.0` |
+| Activation scope | Visit a normal chat at `/c/...`, a shared chat at `/s/...`, and an unrelated ChatGPT page such as settings | The control appears only on the `/c/` and `/s/` prefixes and does not inject on unrelated pages |
 | Prompt rail | Export a conversation with multiple user prompts | A right-edge rail contains one tick/link per user prompt and links to the correct message |
 | Prompt labels | Include a long prompt and a prompt consisting only of a fenced code block | The long label is collapsed with an ellipsis; code-only prompt becomes `Untitled prompt` |
 | Tooltip | Hover or focus a rail tick | A readable label appears to the left of the rail and is not clipped |
@@ -50,6 +51,7 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Coverage warning | Export a conversation with a malformed/dropped mapping node or duplicate message ID | The header reports the dropped or duplicate count instead of silently presenting an apparently complete archive |
 | Hidden-message label | Export a conversation containing a message marked hidden by ChatGPT | The content remains present, the message is visibly labeled as hidden by ChatGPT, and the header reports the count |
 | Mobile width | Open the exported file below 700 px viewport width | The rail is hidden and the transcript uses the full available width |
+| Mobile export control | Open a live `/c/...` chat on Edge Android or another mobile browser extension runner | The Export HTML button and status panel sit above the composer/send area and do not block the send control |
 | Offline output | Open the downloaded HTML with network access disabled or DevTools Network visible | The file remains readable, embedded images remain visible, and it issues zero network requests |
 
 ## Failure report template

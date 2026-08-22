@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.8.0
+// @version      0.8.1
 // @description  Export the currently open ChatGPT or Claude.ai conversation to self-contained HTML with image choices and safe local statistics.
 // @match        https://chatgpt.com/c/*
 // @match        https://chatgpt.com/s/*
@@ -12,7 +12,7 @@
 
 (() => {
 'use strict';
-const ARCHIVER_VERSION = '0.8.0';
+const ARCHIVER_VERSION = '0.8.1';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -549,6 +549,12 @@ function formatModels(conversation) {
   return `<p class="meta">${label}: ${escapeHtml(uniqueModels.join(', '))}</p>`;
 }
 
+function messageModelLine(message, includeMessageModels) {
+  if (!includeMessageModels || message.role !== 'assistant') return '';
+  const model = safeModelLabel(message.modelSlug) ?? 'unknown / not found';
+  return `<span class="msg-model">Model: ${escapeHtml(model)}</span>`;
+}
+
 function railLabel(text) {
   const flat = String(text ?? '').replace(/```[\s\S]*?```/g, ' ').replace(/\s+/g, ' ').trim();
   return flat.length > 72 ? `${flat.slice(0, 71)}…` : (flat || 'Untitled prompt');
@@ -570,6 +576,7 @@ header.export-head { margin-bottom: 24px; }
 .message.user { background: var(--user); border-color: #d1d8ff; }
 .message:target { outline: 2px solid var(--accent); outline-offset: 2px; }
 .message h2 { margin: 0; font-size: .95em; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+.msg-model { display: inline-block; margin-left: 8px; font-size: .88em; font-weight: 400; letter-spacing: 0; color: #8b949e; }
 .msg-time { font-weight: 400; letter-spacing: 0; color: #8b949e; margin-left: 8px; font-size: .92em; }
 .content { overflow-wrap: anywhere; margin-top: 10px; }
 .content a { color: var(--link); }
@@ -650,7 +657,7 @@ const EXPORT_JS = [
   '})();',
 ].join('\n');
 
-function renderConversationHtml(conversation, { exportedAt = new Date().toISOString(), sourceUrl = null, includeConversationId = false, includeTitle = true } = {}) {
+function renderConversationHtml(conversation, { exportedAt = new Date().toISOString(), sourceUrl = null, includeConversationId = false, includeTitle = true, includeMessageModels = true } = {}) {
   const provider = typeof conversation.provider === 'string' && conversation.provider.trim() ? conversation.provider.trim() : 'ChatGPT';
   const railItems = [];
   const messagesHtml = conversation.messages.map((message, index) => {
@@ -664,7 +671,7 @@ function renderConversationHtml(conversation, { exportedAt = new Date().toISOStr
     }
     const hiddenClass = message.hidden ? ' message-hidden' : '';
     const datetime = timestampValue ? ` datetime="${escapeAttribute(timestampValue)}"` : '';
-    return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}${hiddenClass}" id="${id}" data-message-index="${index + 1}" data-message-id="${escapeAttribute(message.id)}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${timestamp ? `<span class="msg-time"><time${datetime}>${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
+    return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}${hiddenClass}" id="${id}" data-message-index="${index + 1}" data-message-id="${escapeAttribute(message.id)}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${messageModelLine(message, includeMessageModels)}${timestamp ? `<span class="msg-time"><time${datetime}>${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
   }).join('\n');
 
   const branchNote = conversation.activeBranch ? `Active ${provider} conversation branch exported.` : `${provider} message array exported.`;
@@ -1806,7 +1813,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
   }
 
   function defaultPrefs() {
-    return { url: true, title: true, conversationId: false, imageMode: 'all' };
+    return { url: true, title: true, conversationId: false, imageMode: 'all', messageModels: true };
   }
 
   function parsePrefs(raw) {
@@ -1816,7 +1823,8 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
       const keys = ['url', 'title', 'conversationId'];
       if (!value || typeof value !== 'object' || keys.some((key) => typeof value[key] !== 'boolean')) return null;
       const imageMode = ['all', 'none', 'choose'].includes(value.imageMode) ? value.imageMode : 'all';
-      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode };
+      const messageModels = typeof value.messageModels === 'boolean' ? value.messageModels : true;
+      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode, messageModels };
     } catch {
       return null;
     }
@@ -1859,6 +1867,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
         title: Boolean(prefs.title),
         conversationId: Boolean(prefs.conversationId),
         imageMode: ['all', 'none', 'choose'].includes(prefs.imageMode) ? prefs.imageMode : 'all',
+        messageModels: prefs.messageModels !== false,
       }));
     } catch {
       // Preference persistence is optional and must never block an export.
@@ -1988,6 +1997,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
     const url = checkbox('cge-pref-url', 'Include the conversation URL', prefs.url);
     const title = checkbox('cge-pref-title', 'Include the conversation title and use it in the filename', prefs.title);
     const conversationId = checkbox('cge-pref-conversation-id', 'Include the conversation ID in the HTML metadata', prefs.conversationId);
+    const messageModels = checkbox('cge-pref-message-models', 'Show a model label on each assistant message', prefs.messageModels);
     const imageChoices = [];
     let imageFieldset = null;
     if (provider === 'ChatGPT') {
@@ -2012,7 +2022,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
     exportButton.className = 'cge-primary';
     exportButton.textContent = 'Export HTML';
     actions.append(cancel, exportButton);
-    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper);
+    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper, messageModels.wrapper);
     if (imageFieldset) card.appendChild(imageFieldset);
     card.appendChild(actions);
     overlay.appendChild(card);
@@ -2026,6 +2036,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
         url: url.input.checked,
         title: title.input.checked,
         conversationId: conversationId.input.checked,
+        messageModels: messageModels.input.checked,
         imageMode: provider === 'ChatGPT' ? (imageChoices.find((input) => input.checked)?.value ?? prefs.imageMode) : prefs.imageMode,
       };
       savePrefs(chosen);
@@ -2088,6 +2099,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
         sourceUrl: prefs.url ? globalThis.location?.href : null,
         includeConversationId: prefs.conversationId,
         includeTitle: prefs.title,
+        includeMessageModels: prefs.messageModels !== false,
       });
       downloadHtml(html, filenameFor(exportableConversation, prefs, exportedAt));
       const imageSummary = Number.isFinite(exportStats.imageCount) && exportStats.imageCount > 0

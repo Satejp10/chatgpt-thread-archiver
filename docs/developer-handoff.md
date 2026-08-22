@@ -4,7 +4,7 @@
 
 ChatGPT Thread Archiver is an independent browser userscript that exports the currently open ChatGPT or Claude.ai conversation to a self-contained offline HTML file. It uses the signed-in browser session and each provider’s same-origin internal web-app requests to retrieve structured conversation data. It does not use DOM scraping for message content and does not send exported conversations to a project server.
 
-The current stable release is **v0.6.0** on `main`; v0.8.0 is the current ChatGPT image-choice candidate on a feature branch, built on the v0.7 image/statistics work. The canonical installable file is `dist/chatgpt-chats-exporter.user.js`; the root `chatgpt-chats-exporter.user.js` is a byte-identical convenience copy.
+The current stable release is **v0.6.0** on `main`; v0.8.1 is the current ChatGPT image-choice/model-indicator candidate on a feature branch, built on the v0.7 image/statistics work. The canonical installable file is `dist/chatgpt-chats-exporter.user.js`; the root `chatgpt-chats-exporter.user.js` is a byte-identical convenience copy.
 
 ## First steps for a new maintainer
 
@@ -35,7 +35,7 @@ Read these documents in this order:
 |---|---|---|
 | `src/chatgpt-client.mjs` | ChatGPT URL parsing, `/c/` and `/s/` activation, session context, token cache, endpoint candidates, account/workspace headers, diagnostics | Keep requests same-origin and bounded. Never log credentials or full IDs. |
 | `src/claude-client.mjs` | Claude `/chat/` route parsing, organization cookie, conversation request, branch selection, text normalization, diagnostics | Keep Claude requests same-origin and bounded. v0.6 marks unsupported content instead of attempting rich rendering. |
-| `src/core.mjs` | Response normalization, active-branch traversal, content parsing, escaping, HTML generation, prompt rail | Add a fixture before changing response handling. Keep conversation text out of generated script source. |
+| `src/core.mjs` | Response normalization, active-branch traversal, content parsing, escaping, HTML generation, prompt rail, optional per-message model labels | Add a fixture before changing response handling. Keep conversation text out of generated script source; show `unknown / not found` rather than guessing a missing model. |
 | `src/chatgpt-assets.mjs` | Image pointer resolution, metadata fallbacks, same-origin URL allowlist, image limits, data-URL conversion | Preserve per-image and total limits, explicit fallbacks, deduplication, and no third-party fetches. Keep image-shape discovery in the normalizer and retrieval logic here. |
 | `src/export-stats.mjs` | Safe local word, character, text-block, role, and model statistics | Count only normalized text included in the export. Never call the provider for token, billing, or context-window data. |
 | `src/exporter-ui.js` | In-page controls, privacy options, image-choice dialog, status messages, download, SPA reinsertion, mobile offsets | Keep image mode choices per-export except for the broad mode preference; never persist individual image selections. |
@@ -54,7 +54,7 @@ Unsupported content and non-image attachments must leave visible omission marker
 
 ChatGPT images are best-effort. The resolver accepts only approved same-origin Estuary content URLs as final image bytes and uses same-origin file-download routes for metadata lookup. It has a 3 MiB per-image cap, a 12 MiB total embedded-image cap, and a 64-image embedded-count cap. v0.8 supports include-all, exclude-all, and individual image selection; excluded images must never trigger image authentication or asset requests. Failed, expired, oversized, unsupported, or budget-limited images must produce explicit fallback markers. v0.7 expands detection for nested image records, execution-output images, alternate pointers, file-download metadata, and already-embedded data URLs. Claude v0.6 is text-only: thinking, tool, file, and attachment blocks receive explicit omission markers and are not embedded.
 
-The exported file must work offline. Keep its restrictive CSP, inline-only rendering resources, `img-src data:`, and no third-party network dependency. Never embed tokens, cookies, signed URLs, or conversation identifiers unless the user explicitly enables the existing privacy option for supported metadata. Provider and model labels and local counts are safe metadata; raw provider responses are not. Local counts must be labelled as local and must not be presented as provider token/context-window usage.
+The exported file must work offline. Keep its restrictive CSP, inline-only rendering resources, `img-src data:`, and no third-party network dependency. Never embed tokens, cookies, signed URLs, or conversation identifiers unless the user explicitly enables the existing privacy option for supported metadata. Provider and model labels and local counts are safe metadata; raw provider responses are not. Local counts must be labelled as local and must not be presented as provider token/context-window usage. The per-message model indicator is optional, enabled by default, and must show `unknown / not found` when a safe model identifier is unavailable.
 
 ## Privacy and security boundaries
 

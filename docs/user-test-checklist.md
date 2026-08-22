@@ -27,10 +27,12 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Light appearance | Open the file on a device using a dark OS theme | The archive remains light and its controls/scrollbars do not switch to a mismatched dark scheme |
 | Line spacing | Export content with several paragraphs and explicit line breaks | Each line/paragraph has normal spacing; no doubled blank gaps appear |
 | Code blocks | Export fenced code with multiple lines | Code preserves its whitespace, remains dark/styled, and scrolls horizontally when needed |
-| Provenance | Inspect the HTML head and footer | Generator metadata and footer identify `chatgpt-thread-archiver 0.8.0` |
+| Provenance | Inspect the HTML head and footer | Generator metadata and footer identify `chatgpt-thread-archiver 0.8.1` |
 | Activation scope | Visit ChatGPT `/c/...`, ChatGPT `/s/...`, Claude `/chat/...`, and unrelated pages such as settings, projects, or `/new` | The control appears only on the supported conversation routes and does not inject elsewhere |
 | Claude text export | Export a Claude conversation containing paragraphs, Markdown, explicit line breaks, and fenced code | An offline HTML file downloads with readable text, timestamps, speaker labels, and preserved code formatting |
 | Claude model | Export a Claude conversation whose API response includes a model name | The HTML header shows the model name without exposing cookies or raw response data |
+| Per-message model label | Export a conversation with one assistant response whose model is known and another whose model is absent | With the option enabled, each assistant message shows its model or `Model: unknown / not found`; user messages do not show model labels |
+| Per-message model toggle | Export once with **Show a model label on each assistant message** enabled and once disabled | Enabled exports show `msg-model` labels; disabled exports do not show per-message labels while the top summary remains unchanged |
 | Claude branch | Export a Claude conversation with a regenerated response while a specific branch is selected | The current branch is exported in order; alternate branches are not duplicated |
 | Claude unsupported content | Export a Claude conversation containing thinking, tool, file, or attachment blocks | Text exports successfully and each unsupported area receives a visible omission marker and count |
 | Prompt rail | Export a conversation with multiple user prompts | A right-edge rail contains one tick/link per user prompt and links to the correct message |

@@ -2,6 +2,14 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.8.1] — 2026-08-22
+
+### Added
+
+Added an optional per-message model indicator to exported assistant messages. The option is enabled by default and can be turned off in the export dialog. When a message has a safe model identifier, the export shows it beside the assistant label; when no usable identifier is present, it shows `Model: unknown / not found` instead of guessing.
+
+The preference applies to the current and future exports, while the export remains local-only and continues to avoid provider token, billing, telemetry, or credential data.
+
 ## [0.8.0] — 2026-08-22
 
 ### Added

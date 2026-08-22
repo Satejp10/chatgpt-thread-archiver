@@ -10,7 +10,7 @@ Resource hints are evidence only. They must remain same-origin, match the allowl
 
 ## Renderer boundaries
 
-`src/core.mjs` owns normalization, bounded recursive content parsing, escaping, privacy-gated metadata, offline HTML generation, and the prompt rail. The rail’s inline behavior is a static string constant. Conversation text must never be interpolated into the exported script. `src/export-stats.mjs` owns local word, character, text-block, role, and model counts and must remain independent of provider token or billing APIs.
+`src/core.mjs` owns normalization, bounded recursive content parsing, escaping, privacy-gated metadata, offline HTML generation, and the prompt rail. The rail’s inline behavior is a static string constant. Conversation text must never be interpolated into the exported script. `src/export-stats.mjs` owns local word, character, text-block, role, and model counts and must remain independent of provider token or billing APIs. The optional per-message model indicator is enabled by default, can be disabled in export preferences, appears only on assistant messages, and shows `Model: unknown / not found` when no safe model identifier is available.
 
 The generated HTML includes a restrictive CSP because Part B adds an inline script. If future features require external assets, they must be treated as a deliberate threat-model change rather than silently added to the document. Local statistics must carry an explicit disclaimer that they count exported text only and are not provider token/context-window measurements.
 

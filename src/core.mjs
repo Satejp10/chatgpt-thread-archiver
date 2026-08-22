@@ -1,4 +1,4 @@
-const ARCHIVER_VERSION = '0.8.0';
+const ARCHIVER_VERSION = '0.8.1';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -535,6 +535,12 @@ function formatModels(conversation) {
   return `<p class="meta">${label}: ${escapeHtml(uniqueModels.join(', '))}</p>`;
 }
 
+function messageModelLine(message, includeMessageModels) {
+  if (!includeMessageModels || message.role !== 'assistant') return '';
+  const model = safeModelLabel(message.modelSlug) ?? 'unknown / not found';
+  return `<span class="msg-model">Model: ${escapeHtml(model)}</span>`;
+}
+
 function railLabel(text) {
   const flat = String(text ?? '').replace(/```[\s\S]*?```/g, ' ').replace(/\s+/g, ' ').trim();
   return flat.length > 72 ? `${flat.slice(0, 71)}…` : (flat || 'Untitled prompt');
@@ -556,6 +562,7 @@ header.export-head { margin-bottom: 24px; }
 .message.user { background: var(--user); border-color: #d1d8ff; }
 .message:target { outline: 2px solid var(--accent); outline-offset: 2px; }
 .message h2 { margin: 0; font-size: .95em; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+.msg-model { display: inline-block; margin-left: 8px; font-size: .88em; font-weight: 400; letter-spacing: 0; color: #8b949e; }
 .msg-time { font-weight: 400; letter-spacing: 0; color: #8b949e; margin-left: 8px; font-size: .92em; }
 .content { overflow-wrap: anywhere; margin-top: 10px; }
 .content a { color: var(--link); }
@@ -636,7 +643,7 @@ const EXPORT_JS = [
   '})();',
 ].join('\n');
 
-export function renderConversationHtml(conversation, { exportedAt = new Date().toISOString(), sourceUrl = null, includeConversationId = false, includeTitle = true } = {}) {
+export function renderConversationHtml(conversation, { exportedAt = new Date().toISOString(), sourceUrl = null, includeConversationId = false, includeTitle = true, includeMessageModels = true } = {}) {
   const provider = typeof conversation.provider === 'string' && conversation.provider.trim() ? conversation.provider.trim() : 'ChatGPT';
   const railItems = [];
   const messagesHtml = conversation.messages.map((message, index) => {
@@ -650,7 +657,7 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
     }
     const hiddenClass = message.hidden ? ' message-hidden' : '';
     const datetime = timestampValue ? ` datetime="${escapeAttribute(timestampValue)}"` : '';
-    return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}${hiddenClass}" id="${id}" data-message-index="${index + 1}" data-message-id="${escapeAttribute(message.id)}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${timestamp ? `<span class="msg-time"><time${datetime}>${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
+    return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}${hiddenClass}" id="${id}" data-message-index="${index + 1}" data-message-id="${escapeAttribute(message.id)}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${messageModelLine(message, includeMessageModels)}${timestamp ? `<span class="msg-time"><time${datetime}>${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
   }).join('\n');
 
   const branchNote = conversation.activeBranch ? `Active ${provider} conversation branch exported.` : `${provider} message array exported.`;

@@ -148,19 +148,19 @@ function displayTextItems(text, role, kind, language = '') {
 
 function contentCandidates(message) {
   const content = message?.content;
-  if (typeof content === 'string') return [{ kind: 'text', value: content }];
-  if (!isPlainObject(content)) return [];
-
   const candidates = [];
-  const parts = Array.isArray(content.parts) ? content.parts : null;
-  if (parts) {
-    for (const part of parts) candidates.push({ kind: 'part', value: part });
-  }
-
-  if (typeof content.text === 'string') candidates.push({ kind: 'text', value: content.text });
-  if (typeof content.content === 'string') candidates.push({ kind: 'text', value: content.content });
-  if (Array.isArray(content.content)) {
-    for (const part of content.content) candidates.push({ kind: 'part', value: part });
+  if (typeof content === 'string') {
+    candidates.push({ kind: 'text', value: content });
+  } else if (isPlainObject(content)) {
+    const parts = Array.isArray(content.parts) ? content.parts : null;
+    if (parts) {
+      for (const part of parts) candidates.push({ kind: 'part', value: part });
+    }
+    if (typeof content.text === 'string') candidates.push({ kind: 'text', value: content.text });
+    if (typeof content.content === 'string') candidates.push({ kind: 'text', value: content.content });
+    if (Array.isArray(content.content)) {
+      for (const part of content.content) candidates.push({ kind: 'part', value: part });
+    }
   }
   const attachmentLists = [message?.metadata?.attachments, content?.metadata?.attachments].filter(Array.isArray);
   const attachments = [...new Set(attachmentLists.flat())];

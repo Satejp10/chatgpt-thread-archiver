@@ -93,7 +93,7 @@ assert.match(pastedJsonHtml, /hi<br>there/);
 assert.match(pastedJsonHtml, /&quot;id&quot;: 42/);
 assert.match(pastedJsonHtml, /&quot;secret&quot;: &quot;keep-me&quot;/);
 
-const attachmentConversation = normalizeConversation({ title: 'Attachment', mapping: { root: { parent: null, children: ['attachment'] }, attachment: { parent: 'root', children: [], message: { id: 'attachment', author: { role: 'user' }, metadata: { attachments: [{ id: 'file-attachment', name: 'report.pdf' }] }, content: { parts: ['Attached report'] } } } }, current_node: 'attachment' });
+const attachmentConversation = normalizeConversation({ title: 'Attachment', mapping: { root: { parent: null, children: ['attachment'] }, attachment: { parent: 'root', children: [], message: { id: 'attachment', author: { role: 'user' }, metadata: { attachments: [{ id: 'file-attachment', name: 'report.pdf' }] }, content: 'Attached report' } } }, current_node: 'attachment' });
 assert.equal(attachmentConversation.stats.omittedBlockCount, 1);
 assert.match(renderConversationHtml(attachmentConversation), /\[non-text content omitted: attachment or file content\]/);
 

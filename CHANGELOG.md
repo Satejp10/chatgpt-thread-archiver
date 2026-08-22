@@ -2,6 +2,14 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.5.1] — 2026-08-22
+
+### Fixed
+
+The userscript now activates only on `chatgpt.com/c/*` normal-chat and `chatgpt.com/s/*` shared-chat paths, both in the userscript metadata and runtime injection guard. The root userscript remains synchronized with the canonical `dist/` artifact.
+
+On narrow screens, the floating export control and status panel are lifted above the ChatGPT composer/send area and account for the device safe-area inset. Route-scope and mobile-position regression checks were added.
+
 ## [0.5.0] — 2026-08-22
 
 ### Fixed

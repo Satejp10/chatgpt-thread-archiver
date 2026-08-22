@@ -595,7 +595,7 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="generator" content="chatgpt-thread-archiver 0.5.0">
+<meta name="generator" content="chatgpt-thread-archiver 0.5.1">
 <meta name="exported-at" content="${escapeAttribute(exportedAt)}">
 ${idMeta}
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'">
@@ -619,7 +619,7 @@ ${sourceBlock}
 <section aria-label="Conversation messages">
 ${messagesHtml}
 </section>
-<footer class="export-footer">${escapeHtml(branchNote)} Generated locally by chatgpt-thread-archiver 0.5.0. This file was generated locally and is designed to work offline.</footer>
+<footer class="export-footer">${escapeHtml(branchNote)} Generated locally by chatgpt-thread-archiver 0.5.1. This file was generated locally and is designed to work offline.</footer>
 </main>
 </div>
 <script>${EXPORT_JS}</script>

@@ -14,7 +14,7 @@ const [core, client, assets, ui] = await Promise.all([
 const banner = `// ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.5.0
+// @version      0.5.1
 // @description  Export the currently open ChatGPT conversation to self-contained HTML.
 // @match        https://chatgpt.com/c/*
 // @match        https://chatgpt.com/s/*

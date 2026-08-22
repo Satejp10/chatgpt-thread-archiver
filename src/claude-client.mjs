@@ -175,6 +175,7 @@ function normalizeClaudeMessage(message, index) {
     authorLabel: hidden ? `${label} (hidden by Claude)` : label,
     createdAt: message?.created_at ?? message?.createdAt ?? null,
     parentId: message?.parent_message_uuid ?? message?.parent ?? null,
+    modelSlug: typeof message?.model === 'string' && message.model.trim() ? message.model.trim() : (typeof message?.model_slug === 'string' && message.model_slug.trim() ? message.model_slug.trim() : null),
     textBlocks,
     omittedCount,
     hidden,

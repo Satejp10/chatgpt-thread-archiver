@@ -2,6 +2,20 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.7.0] — 2026-08-22
+
+### Added
+
+Expanded ChatGPT image recognition to cover nested image records, execution-output image messages, alternate pointer fields, file-download responses, and already-embedded same-origin `data:` images. The resolver now tries the canonical file-download route before older metadata forms, accepts approved same-origin file-download URLs, and preserves the existing MIME, size, total-budget, and offline-embedding safeguards.
+
+Added safe local export statistics for both ChatGPT and Claude.ai. The HTML header and completion status now report message and role counts, text-block count, word count, character count, and model identifiers when available. These values are derived only from the text included in the local export.
+
+### Privacy and reliability
+
+The statistics feature does not request token counts, context-window state, billing information, or provider telemetry. It does not claim that local word or character counts are equivalent to provider token usage. Image pointers and signed URLs remain excluded from exported HTML and diagnostics; only embedded image data or explicit fallback markers are written.
+
+Local regression coverage now includes multiple ChatGPT image shapes, execution-output images, canonical file-download metadata resolution, data-URL embedding, model summaries, and the statistics disclaimer. Live image acceptance remains required because ChatGPT’s internal response formats and asset permissions can vary by account and conversation.
+
 ## [0.6.0] — 2026-08-22
 
 ### Added

@@ -225,18 +225,21 @@
           conversationId,
           onProgress: (completed, total) => showStatus('Resolving images…', `${completed}/${total} image asset(s)`),
         });
+      const exportStats = deriveExportStats(conversation.messages, conversation.stats, { model: conversation.model });
+      const exportableConversation = { ...conversation, stats: exportStats };
       const exportedAt = new Date().toISOString();
-      const html = renderConversationHtml(conversation, {
+      const html = renderConversationHtml(exportableConversation, {
         exportedAt,
         sourceUrl: prefs.url ? globalThis.location?.href : null,
         includeConversationId: prefs.conversationId,
         includeTitle: prefs.title,
       });
-      downloadHtml(html, filenameFor(conversation, prefs, exportedAt));
-      const imageSummary = Number.isFinite(conversation.stats.imageCount) && conversation.stats.imageCount > 0
-        ? ` ${conversation.stats.imageEmbeddedCount} image(s) embedded; ${conversation.stats.imageUnavailableCount} unavailable${conversation.stats.imageBudgetLimitedCount ? `; ${conversation.stats.imageBudgetLimitedCount} limited by export budget` : ''}.`
+      downloadHtml(html, filenameFor(exportableConversation, prefs, exportedAt));
+      const imageSummary = Number.isFinite(exportStats.imageCount) && exportStats.imageCount > 0
+        ? ` ${exportStats.imageEmbeddedCount} image(s) embedded; ${exportStats.imageUnavailableCount} unavailable${exportStats.imageBudgetLimitedCount ? `; ${exportStats.imageBudgetLimitedCount} limited by export budget` : ''}.`
         : '';
-      showStatus('Download ready', `${conversation.stats.messageCount} ${provider} message(s) exported; ${conversation.stats.omittedBlockCount} unsupported block(s) marked.${imageSummary}`);
+      const localStats = `${exportStats.wordCount.toLocaleString('en-US')} words and ${exportStats.characterCount.toLocaleString('en-US')} characters counted locally.`;
+      showStatus('Download ready', `${exportStats.messageCount} ${provider} message(s) exported; ${exportStats.omittedBlockCount} unsupported block(s) marked.${imageSummary} ${localStats}`);
     } catch (error) {
       const description = provider === 'Claude' ? describeClaudeError(error) : describeClientError(error);
       showStatus('Export failed', description, true);

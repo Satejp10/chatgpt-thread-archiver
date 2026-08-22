@@ -26,11 +26,26 @@ function currentAssetOrigin() {
   return globalThis.location?.origin ?? 'https://chatgpt.com';
 }
 
+async function fetchAssetWithTimeout(fetchImpl, url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    const wrapped = new Error(error?.name === 'AbortError' ? 'asset request timed out' : 'asset request failed');
+    wrapped.code = error?.name === 'AbortError' ? 'timeout' : 'network';
+    throw wrapped;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function allowedAssetUrl(raw) {
   try {
     const url = new URL(raw, currentAssetOrigin());
     if (url.origin !== currentAssetOrigin()) return null;
-    const isEstuary = url.pathname === '/backend-api/estuary/content';
+    const pathname = url.pathname.replace(/\/$/, '');
+    const isEstuary = pathname === '/backend-api/estuary/content';
     if (!isEstuary) return null;
     return url.toString();
   } catch {
@@ -42,6 +57,7 @@ function imageRequestCandidates(fileId, conversationId, postId) {
   const fid = encodeURIComponent(fileId);
   const cid = encodeURIComponent(conversationId ?? '');
   const candidates = [
+    `/backend-api/files/download/${fid}?post_id=&inline=false`,
     `/backend-api/files/${fid}/${cid}?conversation_id=${cid}&download_intent=download&include_library_file_state=true&inline=false`,
   ];
   if (postId) candidates.push(`/backend-api/files/${fid}/${cid}?download_intent=download&inline=false&post_id=${encodeURIComponent(postId)}`);
@@ -56,6 +72,16 @@ function imageRequestCandidates(fileId, conversationId, postId) {
 
 function asAssetResult(status, reason, extra = {}) {
   return { status, reason, ...extra };
+}
+
+function dataImageResult(pointer, remainingBytes = Infinity) {
+  const value = String(pointer ?? '');
+  const match = value.match(/^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/i);
+  if (!match || !safeImageMime(match[1])) return null;
+  const byteLength = Math.floor((match[2].length * 3) / 4) - (match[2].endsWith('==') ? 2 : match[2].endsWith('=') ? 1 : 0);
+  if (byteLength > MAX_IMAGE_BYTES) return asAssetResult('unavailable', 'image exceeds the 3 MB embedded size limit');
+  if (byteLength > remainingBytes) return asAssetResult('unavailable', 'image exceeds the 12 MiB total embedded image budget', { budgetLimited: true });
+  return asAssetResult('embedded', null, { dataUrl: value, mimeType: safeImageMime(match[1]), byteLength });
 }
 
 async function readJsonResponse(response) {
@@ -101,7 +127,7 @@ function bytesToDataUrl(bytes, mime) {
 }
 
 async function fetchImageBytes(fetchImpl, url, headers, timeoutMs, remainingBytes = Infinity) {
-  const response = await fetchWithTimeout(fetchImpl, url, {
+  const response = await fetchAssetWithTimeout(fetchImpl, url, {
     method: 'GET',
     credentials: 'same-origin',
     headers,
@@ -123,6 +149,8 @@ async function fetchImageBytes(fetchImpl, url, headers, timeoutMs, remainingByte
 async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, timeoutMs, remainingBytes) {
   const pointer = String(asset?.pointer ?? '');
   if (!pointer) return asAssetResult('unavailable', 'image asset pointer is missing');
+  const embedded = dataImageResult(pointer, remainingBytes);
+  if (embedded) return embedded;
   const direct = allowedAssetUrl(pointer);
   if (direct) return fetchImageBytes(fetchImpl, direct, auth.headers, timeoutMs, remainingBytes);
 
@@ -133,7 +161,7 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
   for (const path of candidates) {
     let response;
     try {
-      response = await fetchWithTimeout(fetchImpl, new URL(path, currentAssetOrigin()).toString(), {
+      response = await fetchAssetWithTimeout(fetchImpl, new URL(path, currentAssetOrigin()).toString(), {
         method: 'GET',
         credentials: 'same-origin',
         headers: auth.headers,
@@ -169,12 +197,12 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
   return asAssetResult('unavailable', lastReason, { fileId });
 }
 
-export async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS } = {}) {
+export async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null } = {}) {
   if (!conversation || !Array.isArray(conversation.messages)) return conversation;
   const imageBlocks = conversation.messages.flatMap((message) => (message.textBlocks ?? []).filter((block) => block.type === 'image').map((block) => ({ block, postId: message.id })));
   if (imageBlocks.length === 0) return { ...conversation, stats: { ...conversation.stats, imageCount: 0, imageEmbeddedCount: 0, imageUnavailableCount: 0, imageBytes: 0, imageBudgetLimitedCount: 0 } };
 
-  const auth = await getAuthContext(fetchImpl);
+  const auth = authContext ?? await getAuthContext(fetchImpl);
   const cache = new Map();
   const occurrenceResults = [];
   let completed = 0;

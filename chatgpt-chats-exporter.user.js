@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.6.0
-// @description  Export the currently open ChatGPT or Claude.ai conversation to self-contained HTML.
+// @version      0.7.0
+// @description  Export the currently open ChatGPT or Claude.ai conversation to self-contained HTML with safe local statistics.
 // @match        https://chatgpt.com/c/*
 // @match        https://chatgpt.com/s/*
 // @match        https://claude.ai/chat/*
@@ -12,7 +12,7 @@
 
 (() => {
 'use strict';
-const ARCHIVER_VERSION = '0.6.0';
+const ARCHIVER_VERSION = '0.7.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -145,6 +145,34 @@ function displayTextItems(text, role, kind, language = '') {
   return [{ kind, text: formatToolTranscript(rawText), language }];
 }
 
+function imagePointerFromValue(value, depth = 0) {
+  if (depth > 3 || value === null || value === undefined) return null;
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (!isPlainObject(value)) return null;
+  for (const key of ['asset_pointer', 'assetPointer', 'image_url', 'imageUrl', 'download_url', 'downloadUrl', 'url', 'href', 'src', 'file_id', 'fileId', 'asset_pointer_link', 'watermarked_asset_pointer', 'image', 'asset']) {
+    const pointer = imagePointerFromValue(value[key], depth + 1);
+    if (pointer) return pointer;
+  }
+  return null;
+}
+
+function executionImageRecords(value, depth = 0, seen = new Set()) {
+  if (depth > 4 || !isPlainObject(value) || seen.has(value)) return [];
+  seen.add(value);
+  const records = [];
+  for (const messages of [value?.metadata?.aggregate_result?.messages, value?.aggregate_result?.messages]) {
+    if (Array.isArray(messages)) records.push(...messages.filter((item) => isPlainObject(item)));
+  }
+  for (const key of ['metadata', 'aggregate_result', 'parts', 'content', 'messages']) {
+    const nested = value[key];
+    if (nested && typeof nested === 'object') {
+      if (Array.isArray(nested)) for (const item of nested) records.push(...executionImageRecords(item, depth + 1, seen));
+      else records.push(...executionImageRecords(nested, depth + 1, seen));
+    }
+  }
+  return records;
+}
+
 function contentCandidates(message) {
   const content = message?.content;
   const candidates = [];
@@ -178,6 +206,25 @@ function contentCandidates(message) {
   const attachmentLists = [message?.metadata?.attachments, content?.metadata?.attachments].filter(Array.isArray);
   const attachments = [...new Set(attachmentLists.flat())];
   for (const attachment of attachments) add({ kind: 'attachment', value: attachment });
+
+  const executionMessages = executionImageRecords(message);
+  for (const executionMessage of executionMessages) {
+    const executionType = String(executionMessage?.message_type ?? executionMessage?.type ?? executionMessage?.content_type ?? '').toLowerCase();
+    if (!executionType.includes('image')) continue;
+    const pointer = imagePointerFromValue(executionMessage);
+    if (!pointer) continue;
+    add({
+      kind: 'part',
+      value: {
+        content_type: 'image_asset_pointer',
+        asset_pointer: pointer,
+        mime_type: executionMessage?.mime_type ?? executionMessage?.mimeType ?? '',
+        width: executionMessage?.width,
+        height: executionMessage?.height,
+      },
+      source: 'execution-output',
+    });
+  }
   return candidates;
 }
 
@@ -189,17 +236,19 @@ function normalizePart(candidate, depth = 0) {
   if (!isPlainObject(value)) return { kind: 'omitted', reason: 'non-text content part' };
 
   const type = String(value.content_type ?? value.type ?? value.kind ?? '').toLowerCase();
-  if (typeof value.asset_pointer === 'string' && type.includes('image')) {
+  const pointer = imagePointerFromValue(value);
+  const imageShape = type.includes('image') || Object.prototype.hasOwnProperty.call(value, 'asset_pointer') || Object.prototype.hasOwnProperty.call(value, 'image_url');
+  if (pointer && imageShape) {
     const metadata = isPlainObject(value.metadata) ? value.metadata : {};
     return {
       kind: 'image',
       asset: {
-        pointer: value.asset_pointer,
-        mimeType: value.mime_type ?? '',
+        pointer,
+        mimeType: value.mime_type ?? value.mimeType ?? '',
         sizeBytes: Number.isFinite(value.size_bytes) ? value.size_bytes : null,
         width: Number.isFinite(value.width) ? value.width : null,
         height: Number.isFinite(value.height) ? value.height : null,
-        generated: Boolean(metadata.dalle || metadata.generation),
+        generated: Boolean(metadata.dalle || metadata.generation || value.generated),
       },
     };
   }
@@ -311,6 +360,7 @@ function normalizeNode(node, index) {
     authorLabel: hidden ? `${labelForRole(role)} (hidden by ChatGPT)` : labelForRole(role),
     createdAt: message.create_time ?? message.createdAt ?? message.created_at ?? null,
     parentId: node.parent ?? message.parent ?? null,
+    modelSlug: asNonEmptyString(message.model_slug) ?? asNonEmptyString(message.modelSlug) ?? asNonEmptyString(message.metadata?.model_slug) ?? asNonEmptyString(message.metadata?.model) ?? null,
     textBlocks: extracted.blocks,
     omittedCount: extracted.omittedCount,
     hidden,
@@ -322,6 +372,7 @@ function normalizeConversation(raw) {
 
   const title = asNonEmptyString(raw.title) ?? asNonEmptyString(raw.name) ?? 'ChatGPT conversation';
   const conversationId = asNonEmptyString(raw.conversation_id) ?? asNonEmptyString(raw.conversationId) ?? null;
+  const model = asNonEmptyString(raw.model_slug) ?? asNonEmptyString(raw.modelSlug) ?? asNonEmptyString(raw.default_model_slug) ?? null;
   let nodes;
   let sourceShape;
   let activeBranch = true;
@@ -357,6 +408,7 @@ function normalizeConversation(raw) {
   return {
     title,
     conversationId,
+    model,
     provider: 'ChatGPT',
     sourceShape,
     activeBranch,
@@ -469,6 +521,31 @@ function roleCounts(messages, provider = 'ChatGPT') {
   const counts = new Map();
   for (const message of messages) counts.set(message.role, (counts.get(message.role) ?? 0) + 1);
   return [...counts.entries()].map(([role, count]) => `${count} ${role === 'assistant' ? provider : (ROLE_LABELS[role] ?? role)}`).join(', ');
+}
+
+function formatLocalStats(stats) {
+  if (!Number.isFinite(stats?.wordCount) || !Number.isFinite(stats?.characterCount)) return '';
+  const words = Number(stats.wordCount).toLocaleString('en-US');
+  const characters = Number(stats.characterCount).toLocaleString('en-US');
+  const blocks = Number.isFinite(stats.textBlockCount) ? ` · ${Number(stats.textBlockCount).toLocaleString('en-US')} text blocks` : '';
+  return `<p class="meta">Safe local stats: ${words} words · ${characters} characters${blocks}. Counted from exported text only; provider token and context-window usage are not included.</p>`;
+}
+
+function safeModelLabel(value) {
+  const model = String(value ?? '').trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(model) ? model : null;
+}
+
+function formatModels(conversation) {
+  const models = Array.isArray(conversation?.stats?.modelsUsed) ? conversation.stats.modelsUsed.map(safeModelLabel).filter(Boolean) : [];
+  if (models.length === 0) {
+    const model = safeModelLabel(conversation?.model);
+    if (model) models.push(model);
+  }
+  if (models.length === 0) return '';
+  const uniqueModels = [...new Set(models)];
+  const label = uniqueModels.length === 1 ? 'Model' : 'Models used';
+  return `<p class="meta">${label}: ${escapeHtml(uniqueModels.join(', '))}</p>`;
 }
 
 function railLabel(text) {
@@ -595,7 +672,8 @@ function renderConversationHtml(conversation, { exportedAt = new Date().toISOStr
   const idMeta = includeConversationId && conversation.conversationId ? `<meta name="conversation-id" content="${escapeAttribute(conversation.conversationId)}">` : '';
   const sourceBlock = sourceUrl ? `<p class="meta">Source: <a href="${escapeAttribute(sourceUrl)}" rel="noopener noreferrer">${escapeHtml(sourceUrl)}</a></p>` : '';
   const metadata = `<p class="meta">Exported ${escapeHtml(exportedAt)} · ${conversation.stats.messageCount} message${conversation.stats.messageCount === 1 ? '' : 's'} (${escapeHtml(roleCounts(conversation.messages, provider))})</p>`;
-  const modelLine = typeof conversation.model === 'string' && conversation.model.trim() ? `<p class="meta">Model: ${escapeHtml(conversation.model)}</p>` : '';
+  const modelLine = formatModels(conversation);
+  const statsLine = formatLocalStats(conversation.stats);
   const omissionLine = conversation.stats.omittedBlockCount > 0
     ? `<p class="meta flag-warn">${conversation.stats.omittedBlockCount} omitted non-text block${conversation.stats.omittedBlockCount === 1 ? '' : 's'}</p>`
     : '<p class="meta flag-ok">Text blocks complete</p>';
@@ -606,7 +684,7 @@ function renderConversationHtml(conversation, { exportedAt = new Date().toISOStr
     ? `<p class="meta flag-warn">Coverage: ${conversation.stats.droppedNodeCount ?? 0} dropped node${conversation.stats.droppedNodeCount === 1 ? '' : 's'}, ${conversation.stats.duplicateMessageCount ?? 0} duplicate message${conversation.stats.duplicateMessageCount === 1 ? '' : 's'} removed</p>`
     : '';
   const hiddenLine = (conversation.stats.hiddenMessageCount ?? 0) > 0
-    ? `<p class="meta flag-warn">${conversation.stats.hiddenMessageCount} message${conversation.stats.hiddenMessageCount === 1 ? '' : 's'} marked hidden by ChatGPT; included unchanged</p>`
+    ? `<p class="meta flag-warn">${conversation.stats.hiddenMessageCount} message${conversation.stats.hiddenMessageCount === 1 ? '' : 's'} marked hidden by ${escapeHtml(provider)}; included unchanged</p>`
     : '';
   return `<!doctype html>
 <html lang="en">
@@ -628,6 +706,7 @@ ${idMeta}
   <h1>${title}</h1>
   ${metadata}
   ${modelLine}
+  ${statsLine}
   ${sourceBlock}
   ${omissionLine}
   ${imageLine}
@@ -1274,6 +1353,7 @@ function normalizeClaudeMessage(message, index) {
     authorLabel: hidden ? `${label} (hidden by Claude)` : label,
     createdAt: message?.created_at ?? message?.createdAt ?? null,
     parentId: message?.parent_message_uuid ?? message?.parent ?? null,
+    modelSlug: typeof message?.model === 'string' && message.model.trim() ? message.model.trim() : (typeof message?.model_slug === 'string' && message.model_slug.trim() ? message.model_slug.trim() : null),
     textBlocks,
     omittedCount,
     hidden,
@@ -1373,11 +1453,26 @@ function currentAssetOrigin() {
   return globalThis.location?.origin ?? 'https://chatgpt.com';
 }
 
+async function fetchAssetWithTimeout(fetchImpl, url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    const wrapped = new Error(error?.name === 'AbortError' ? 'asset request timed out' : 'asset request failed');
+    wrapped.code = error?.name === 'AbortError' ? 'timeout' : 'network';
+    throw wrapped;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function allowedAssetUrl(raw) {
   try {
     const url = new URL(raw, currentAssetOrigin());
     if (url.origin !== currentAssetOrigin()) return null;
-    const isEstuary = url.pathname === '/backend-api/estuary/content';
+    const pathname = url.pathname.replace(/\/$/, '');
+    const isEstuary = pathname === '/backend-api/estuary/content';
     if (!isEstuary) return null;
     return url.toString();
   } catch {
@@ -1389,6 +1484,7 @@ function imageRequestCandidates(fileId, conversationId, postId) {
   const fid = encodeURIComponent(fileId);
   const cid = encodeURIComponent(conversationId ?? '');
   const candidates = [
+    `/backend-api/files/download/${fid}?post_id=&inline=false`,
     `/backend-api/files/${fid}/${cid}?conversation_id=${cid}&download_intent=download&include_library_file_state=true&inline=false`,
   ];
   if (postId) candidates.push(`/backend-api/files/${fid}/${cid}?download_intent=download&inline=false&post_id=${encodeURIComponent(postId)}`);
@@ -1403,6 +1499,16 @@ function imageRequestCandidates(fileId, conversationId, postId) {
 
 function asAssetResult(status, reason, extra = {}) {
   return { status, reason, ...extra };
+}
+
+function dataImageResult(pointer, remainingBytes = Infinity) {
+  const value = String(pointer ?? '');
+  const match = value.match(/^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/i);
+  if (!match || !safeImageMime(match[1])) return null;
+  const byteLength = Math.floor((match[2].length * 3) / 4) - (match[2].endsWith('==') ? 2 : match[2].endsWith('=') ? 1 : 0);
+  if (byteLength > MAX_IMAGE_BYTES) return asAssetResult('unavailable', 'image exceeds the 3 MB embedded size limit');
+  if (byteLength > remainingBytes) return asAssetResult('unavailable', 'image exceeds the 12 MiB total embedded image budget', { budgetLimited: true });
+  return asAssetResult('embedded', null, { dataUrl: value, mimeType: safeImageMime(match[1]), byteLength });
 }
 
 async function readJsonResponse(response) {
@@ -1448,7 +1554,7 @@ function bytesToDataUrl(bytes, mime) {
 }
 
 async function fetchImageBytes(fetchImpl, url, headers, timeoutMs, remainingBytes = Infinity) {
-  const response = await fetchWithTimeout(fetchImpl, url, {
+  const response = await fetchAssetWithTimeout(fetchImpl, url, {
     method: 'GET',
     credentials: 'same-origin',
     headers,
@@ -1470,6 +1576,8 @@ async function fetchImageBytes(fetchImpl, url, headers, timeoutMs, remainingByte
 async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, timeoutMs, remainingBytes) {
   const pointer = String(asset?.pointer ?? '');
   if (!pointer) return asAssetResult('unavailable', 'image asset pointer is missing');
+  const embedded = dataImageResult(pointer, remainingBytes);
+  if (embedded) return embedded;
   const direct = allowedAssetUrl(pointer);
   if (direct) return fetchImageBytes(fetchImpl, direct, auth.headers, timeoutMs, remainingBytes);
 
@@ -1480,7 +1588,7 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
   for (const path of candidates) {
     let response;
     try {
-      response = await fetchWithTimeout(fetchImpl, new URL(path, currentAssetOrigin()).toString(), {
+      response = await fetchAssetWithTimeout(fetchImpl, new URL(path, currentAssetOrigin()).toString(), {
         method: 'GET',
         credentials: 'same-origin',
         headers: auth.headers,
@@ -1516,12 +1624,12 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
   return asAssetResult('unavailable', lastReason, { fileId });
 }
 
-async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS } = {}) {
+async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null } = {}) {
   if (!conversation || !Array.isArray(conversation.messages)) return conversation;
   const imageBlocks = conversation.messages.flatMap((message) => (message.textBlocks ?? []).filter((block) => block.type === 'image').map((block) => ({ block, postId: message.id })));
   if (imageBlocks.length === 0) return { ...conversation, stats: { ...conversation.stats, imageCount: 0, imageEmbeddedCount: 0, imageUnavailableCount: 0, imageBytes: 0, imageBudgetLimitedCount: 0 } };
 
-  const auth = await getAuthContext(fetchImpl);
+  const auth = authContext ?? await getAuthContext(fetchImpl);
   const cache = new Map();
   const occurrenceResults = [];
   let completed = 0;
@@ -1566,6 +1674,44 @@ async function resolveConversationImages(conversation, { fetchImpl = globalThis.
     ...conversation,
     messages,
     stats: { ...conversation.stats, imageCount: imageBlocks.length, imageEmbeddedCount: embeddedCount, imageUnavailableCount: unavailableCount, imageBytes, imageBudgetLimitedCount: budgetLimitedCount },
+  };
+}
+
+function statText(message) {
+  return (message?.textBlocks ?? [])
+    .filter((block) => block.type === 'text' || block.type === 'code')
+    .map((block) => String(block.text ?? ''))
+    .join('\n');
+}
+
+function wordCount(text) {
+  const value = String(text ?? '').trim();
+  return value ? value.split(/\s+/u).length : 0;
+}
+
+function safeModelIdentifier(value) {
+  const model = String(value ?? '').trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(model) ? model : null;
+}
+
+function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
+  const list = Array.isArray(messages) ? messages : [];
+  const text = list.map(statText).filter(Boolean).join('\n');
+  const modelsUsed = [...new Set([
+    safeModelIdentifier(model),
+    ...list.map((message) => safeModelIdentifier(message?.modelSlug)),
+  ].filter(Boolean))];
+  const textBlockCount = list.reduce((sum, message) => sum + (message?.textBlocks ?? []).filter((block) => block.type === 'text' || block.type === 'code').length, 0);
+  return {
+    ...baseStats,
+    messageCount: list.length,
+    userMessageCount: list.filter((message) => message.role === 'user').length,
+    assistantMessageCount: list.filter((message) => message.role === 'assistant').length,
+    toolMessageCount: list.filter((message) => message.role === 'tool').length,
+    textBlockCount,
+    wordCount: wordCount(text),
+    characterCount: [...text].length,
+    modelsUsed,
   };
 }
 
@@ -1796,18 +1942,21 @@ async function resolveConversationImages(conversation, { fetchImpl = globalThis.
           conversationId,
           onProgress: (completed, total) => showStatus('Resolving images…', `${completed}/${total} image asset(s)`),
         });
+      const exportStats = deriveExportStats(conversation.messages, conversation.stats, { model: conversation.model });
+      const exportableConversation = { ...conversation, stats: exportStats };
       const exportedAt = new Date().toISOString();
-      const html = renderConversationHtml(conversation, {
+      const html = renderConversationHtml(exportableConversation, {
         exportedAt,
         sourceUrl: prefs.url ? globalThis.location?.href : null,
         includeConversationId: prefs.conversationId,
         includeTitle: prefs.title,
       });
-      downloadHtml(html, filenameFor(conversation, prefs, exportedAt));
-      const imageSummary = Number.isFinite(conversation.stats.imageCount) && conversation.stats.imageCount > 0
-        ? ` ${conversation.stats.imageEmbeddedCount} image(s) embedded; ${conversation.stats.imageUnavailableCount} unavailable${conversation.stats.imageBudgetLimitedCount ? `; ${conversation.stats.imageBudgetLimitedCount} limited by export budget` : ''}.`
+      downloadHtml(html, filenameFor(exportableConversation, prefs, exportedAt));
+      const imageSummary = Number.isFinite(exportStats.imageCount) && exportStats.imageCount > 0
+        ? ` ${exportStats.imageEmbeddedCount} image(s) embedded; ${exportStats.imageUnavailableCount} unavailable${exportStats.imageBudgetLimitedCount ? `; ${exportStats.imageBudgetLimitedCount} limited by export budget` : ''}.`
         : '';
-      showStatus('Download ready', `${conversation.stats.messageCount} ${provider} message(s) exported; ${conversation.stats.omittedBlockCount} unsupported block(s) marked.${imageSummary}`);
+      const localStats = `${exportStats.wordCount.toLocaleString('en-US')} words and ${exportStats.characterCount.toLocaleString('en-US')} characters counted locally.`;
+      showStatus('Download ready', `${exportStats.messageCount} ${provider} message(s) exported; ${exportStats.omittedBlockCount} unsupported block(s) marked.${imageSummary} ${localStats}`);
     } catch (error) {
       const description = provider === 'Claude' ? describeClaudeError(error) : describeClientError(error);
       showStatus('Export failed', description, true);

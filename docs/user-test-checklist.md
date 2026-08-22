@@ -27,7 +27,7 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Light appearance | Open the file on a device using a dark OS theme | The archive remains light and its controls/scrollbars do not switch to a mismatched dark scheme |
 | Line spacing | Export content with several paragraphs and explicit line breaks | Each line/paragraph has normal spacing; no doubled blank gaps appear |
 | Code blocks | Export fenced code with multiple lines | Code preserves its whitespace, remains dark/styled, and scrolls horizontally when needed |
-| Provenance | Inspect the HTML head and footer | Generator metadata and footer identify `chatgpt-thread-archiver 0.6.0` |
+| Provenance | Inspect the HTML head and footer | Generator metadata and footer identify `chatgpt-thread-archiver 0.7.0` |
 | Activation scope | Visit ChatGPT `/c/...`, ChatGPT `/s/...`, Claude `/chat/...`, and unrelated pages such as settings, projects, or `/new` | The control appears only on the supported conversation routes and does not inject elsewhere |
 | Claude text export | Export a Claude conversation containing paragraphs, Markdown, explicit line breaks, and fenced code | An offline HTML file downloads with readable text, timestamps, speaker labels, and preserved code formatting |
 | Claude model | Export a Claude conversation whose API response includes a model name | The HTML header shows the model name without exposing cookies or raw response data |
@@ -43,10 +43,14 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Copy button | Click **Copy** on several messages before and after comparing the legacy class structure | The correct message body is copied, and the button briefly reports `Copied` or a clear failure |
 | Rail jump alignment | Click a rail tick near the top of a message | The message heading is visible and is not tucked under the viewport edge |
 | Role counts | Export a conversation with known user and assistant counts | The header reports total messages and per-role counts accurately |
+| Safe local statistics | Export a text conversation with known content | The header and completion status report word, character, and text-block counts derived from exported text only, with a disclaimer that they are not provider token or context-window statistics |
+| Statistics privacy | Inspect the exported HTML and Network panel | No token, billing, context-window, cookie, authorization, signed URL, or provider-telemetry data is requested or written by the statistics feature |
 | Formatting | Include paragraphs, explicit line breaks, bold/italic text, inline code, and fenced code | Formatting is rendered conservatively; code remains intact and horizontally scrollable if needed |
 | Special characters | Include `<`, `>`, `&`, quotes, Unicode, right-to-left text, and `<script>alert(1)</script>` | Characters display literally; no markup or script executes in the body, rail, or tooltip |
 | Regeneration | Export a chat with a regenerated assistant response | Only the active current branch is exported; alternate branches are not duplicated |
 | Image embedding | Export a conversation containing an uploaded or generated image that is still available | The HTML contains a visible image, the header reports it as embedded, and the image remains visible after opening the file offline |
+| Image variants | Test an uploaded image, generated image, image inside a tool/execution result, and a conversation containing multiple images | Each available image is embedded or receives an explicit reason; no image is silently skipped because it came from a different response shape |
+| Image metadata fallback | Test an image whose pointer is a `file-...` or `sediment://...` value | The exporter tries the file-download metadata path and embeds the returned same-origin image when available |
 | Image fallback | Export a conversation containing an expired, inaccessible, oversized, or unsupported image asset | The export completes with an explicit `[image unavailable: ...]` marker and the header reports the unavailable count; the asset is not silently omitted |
 | Image privacy boundary | Inspect the exported HTML and Network panel during image export | No third-party requests occur; signed URLs, asset pointers, tokens, and cookies are absent from the exported HTML and diagnostics |
 | Unsupported content | Export a conversation containing a file, citation, canvas, or other non-image tool artifact | Text exports, an omission marker is visible, and the omission count is reported |

@@ -56,6 +56,8 @@ node --check dist/chatgpt-chats-exporter.user.js
 
 `npm run build` creates `dist/chatgpt-chats-exporter.user.js`. `npm run check` validates the response adapter, active-branch traversal, explicit `content.parts` precedence with value deduplication, literal escape preservation for ordinary text, formatting, image normalization and rendering, image per-file and total export budgets, prompt rail, metadata privacy, recursion limits, route parsing, endpoint construction, filename sanitization, 0.5.1 image-resolver, route-scope, mobile-position, and audit-remediation invariants, and expected failure behavior using local fixtures. These checks do not log into ChatGPT and do not replace the user’s live browser testing.
 
+For a new maintainer, start with [`docs/developer-handoff.md`](docs/developer-handoff.md), then use [`docs/build-history.md`](docs/build-history.md) for the reproducible build commands, release history, validation record, artifact rules, and branch workflow. [`docs/maintenance-notes.md`](docs/maintenance-notes.md) records the boundaries that should not be changed casually.
+
 ## User testing
 
 Open `docs/user-test-checklist.md` for the live acceptance pass. Part A should be tested before relying on the new exported-file interactions. The user should test token/session expiry, route changes, short and long conversations, regenerated responses, special characters, unsupported content, prompt navigation, copy buttons, JavaScript-disabled fallback, mobile width, and offline loading.

@@ -25,7 +25,7 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Light appearance | Open the file on a device using a dark OS theme | The archive remains light and its controls/scrollbars do not switch to a mismatched dark scheme |
 | Line spacing | Export content with several paragraphs and explicit line breaks | Each line/paragraph has normal spacing; no doubled blank gaps appear |
 | Code blocks | Export fenced code with multiple lines | Code preserves its whitespace, remains dark/styled, and scrolls horizontally when needed |
-| Provenance | Inspect the HTML head and footer | Generator metadata and footer identify `chatgpt-thread-archiver 0.4.1` |
+| Provenance | Inspect the HTML head and footer | Generator metadata and footer identify `chatgpt-thread-archiver 0.5.0` |
 | Prompt rail | Export a conversation with multiple user prompts | A right-edge rail contains one tick/link per user prompt and links to the correct message |
 | Prompt labels | Include a long prompt and a prompt consisting only of a fenced code block | The long label is collapsed with an ellipsis; code-only prompt becomes `Untitled prompt` |
 | Tooltip | Hover or focus a rail tick | A readable label appears to the left of the rail and is not clipped |
@@ -43,6 +43,9 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Image fallback | Export a conversation containing an expired, inaccessible, oversized, or unsupported image asset | The export completes with an explicit `[image unavailable: ...]` marker and the header reports the unavailable count; the asset is not silently omitted |
 | Image privacy boundary | Inspect the exported HTML and Network panel during image export | No third-party requests occur; signed URLs, asset pointers, tokens, and cookies are absent from the exported HTML and diagnostics |
 | Unsupported content | Export a conversation containing a file, citation, canvas, or other non-image tool artifact | Text exports, an omission marker is visible, and the omission count is reported |
+| Structured JSON preservation | Include a tool-like or pasted JSON object with a readable field plus additional fields | The readable field is formatted as text and the additional fields remain visible in a JSON block |
+| Coverage warning | Export a conversation with a malformed/dropped mapping node or duplicate message ID | The header reports the dropped or duplicate count instead of silently presenting an apparently complete archive |
+| Hidden-message label | Export a conversation containing a message marked hidden by ChatGPT | The content remains present, the message is visibly labeled as hidden by ChatGPT, and the header reports the count |
 | Mobile width | Open the exported file below 700 px viewport width | The rail is hidden and the transcript uses the full available width |
 | Offline output | Open the downloaded HTML with network access disabled or DevTools Network visible | The file remains readable, embedded images remain visible, and it issues zero network requests |
 

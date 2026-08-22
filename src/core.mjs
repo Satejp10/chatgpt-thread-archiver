@@ -50,13 +50,16 @@ function decodeEscapedText(value) {
     const decoded = JSON.parse(`"${text}"`);
     return typeof decoded === 'string' ? decoded : text;
   } catch {
-    return text
-      .replaceAll('\\r\\n', '\n')
-      .replaceAll('\\n', '\n')
-      .replaceAll('\\r', '\r')
-      .replaceAll('\\t', '\t')
-      .replaceAll('\\"', '"')
-      .replaceAll('\\\\', '\\');
+    return text.replace(/\\\\|\\r\\n|\\n|\\r|\\t|\\u([0-9a-f]{4})|\\(["\\])/gi, (match, hex, quote) => {
+      if (match === '\\\\') return '\\';
+      if (hex) return String.fromCharCode(parseInt(hex, 16));
+      if (quote) return quote;
+      if (match === '\\r\\n') return '\n';
+      if (match === '\\n') return '\n';
+      if (match === '\\r') return '\r';
+      if (match === '\\t') return '\t';
+      return match;
+    });
   }
 }
 
@@ -74,22 +77,38 @@ function parseStructuredToolText(text) {
   }
 }
 
-function structuredReadableText(value) {
+const STRUCTURED_TEXT_KEYS = ['content', 'text', 'output', 'result', 'message'];
+
+function structuredReadableEntry(value) {
   if (!isPlainObject(value)) return null;
-  for (const key of ['content', 'text', 'output', 'result', 'message']) {
-    if (typeof value[key] === 'string' && value[key].trim()) return decodeEscapedText(value[key]);
+  for (const key of STRUCTURED_TEXT_KEYS) {
+    if (typeof value[key] === 'string' && value[key].trim()) return { key, text: decodeEscapedText(value[key]) };
   }
   return null;
+}
+
+function structuredReadableText(value) {
+  return structuredReadableEntry(value)?.text ?? null;
+}
+
+function structuredRemainder(value) {
+  const readable = structuredReadableEntry(value);
+  if (!readable) return null;
+  const remainder = Object.fromEntries(Object.entries(value).filter(([key]) => key !== readable.key));
+  return Object.keys(remainder).length > 0 ? remainder : null;
 }
 
 function formatToolTranscript(text) {
   const decoded = decodeEscapedText(text);
   return decoded.split('\n').map((line) => {
-    const marker = line.match(/^\\s*\\[L\\d+\\]\\s*(.*)$/);
+    const marker = line.match(/^\s*\[L\d+\]\s*(.*)$/);
     if (!marker) return line;
     const parsed = parseStructuredToolText(marker[1]);
     if (parsed === null) return marker[1];
-    return structuredReadableText(parsed) ?? JSON.stringify(parsed, null, 2);
+    const readable = structuredReadableText(parsed);
+    const remainder = structuredRemainder(parsed);
+    if (readable && remainder) return `${readable}\n\n[additional structured fields]\n${JSON.stringify(remainder, null, 2)}`;
+    return readable ?? JSON.stringify(parsed, null, 2);
   }).join('\n');
 }
 
@@ -103,7 +122,12 @@ function displayTextItems(text, role, kind, language = '') {
   const parsed = parseStructuredToolText(rawText);
   if (parsed !== null) {
     const readable = structuredReadableText(parsed);
-    if (readable !== null) return [{ kind: 'text', text: readable, language: '' }];
+    if (readable !== null) {
+      const blocks = [{ kind: 'text', text: readable, language: '' }];
+      const remainder = structuredRemainder(parsed);
+      if (remainder) blocks.push({ kind: 'code', text: JSON.stringify(remainder, null, 2), language: 'json' });
+      return blocks;
+    }
     return [{ kind: 'code', text: JSON.stringify(parsed, null, 2), language: 'json' }];
   }
   return [{ kind, text: formatToolTranscript(rawText), language }];
@@ -125,11 +149,15 @@ function contentCandidates(message) {
   if (Array.isArray(content.content)) {
     for (const part of content.content) candidates.push({ kind: 'part', value: part });
   }
+  const attachmentLists = [message?.metadata?.attachments, content?.metadata?.attachments].filter(Array.isArray);
+  const attachments = [...new Set(attachmentLists.flat())];
+  for (const attachment of attachments) candidates.push({ kind: 'attachment', value: attachment });
   return candidates;
 }
 
 function normalizePart(candidate, depth = 0) {
-  const { value } = candidate;
+  const { kind: candidateKind, value } = candidate;
+  if (candidateKind === 'attachment') return { kind: 'omitted', reason: 'attachment or file content' };
   if (depth > 16) return { kind: 'omitted', reason: 'nested content depth exceeded' };
   if (typeof value === 'string') return { kind: 'text', text: value };
   if (!isPlainObject(value)) return { kind: 'omitted', reason: 'non-text content part' };
@@ -204,12 +232,23 @@ function mappingEntries(raw) {
   return Object.entries(raw.mapping).map(([id, node]) => ({ id, ...(isPlainObject(node) ? node : {}) }));
 }
 
+function epochMilliseconds(value) {
+  if (value === null || value === undefined || value === '') return NaN;
+  const numeric = typeof value === 'number' ? value : (typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value) ? Number(value) : NaN);
+  const candidate = Number.isFinite(numeric) ? (numeric < 10_000_000_000 ? numeric * 1000 : numeric) : value;
+  const time = new Date(candidate).getTime();
+  return Number.isFinite(time) ? time : NaN;
+}
+
 function chooseLeaf(entries, currentNode) {
   if (currentNode && entries.some((entry) => entry.id === currentNode)) return currentNode;
   const withMessages = entries.filter((entry) => entry.message);
-  const childIds = new Set(entries.flatMap((entry) => Array.isArray(entry.children) ? entry.children : []));
-  const leaves = withMessages.filter((entry) => !childIds.has(entry.id));
-  return (leaves.at(-1) ?? withMessages.at(-1))?.id ?? null;
+  const leaves = withMessages.filter((entry) => !Array.isArray(entry.children) || entry.children.length === 0);
+  if (leaves.length <= 1) return (leaves[0] ?? withMessages.at(-1))?.id ?? null;
+  const ranked = leaves.map((entry, index) => ({ entry, index, time: epochMilliseconds(entry.message?.create_time ?? entry.message?.createdAt ?? entry.message?.created_at) }));
+  if (!ranked.some((item) => Number.isFinite(item.time))) return (leaves.at(-1) ?? withMessages.at(-1))?.id ?? null;
+  ranked.sort((left, right) => (Number.isFinite(left.time) ? left.time : -Infinity) - (Number.isFinite(right.time) ? right.time : -Infinity) || left.index - right.index);
+  return ranked.at(-1)?.entry.id ?? null;
 }
 
 function pathFromMapping(entries, leafId) {
@@ -239,14 +278,16 @@ function normalizeNode(node, index) {
   if (!isPlainObject(message)) return null;
   const role = roleForMessage(message);
   const extracted = extractTextBlocks(message);
+  const hidden = Boolean(message.is_visually_hidden_from_conversation);
   return {
     id: String(node.id ?? message.id ?? `message-${index + 1}`),
     role,
-    authorLabel: labelForRole(role),
+    authorLabel: hidden ? `${labelForRole(role)} (hidden by ChatGPT)` : labelForRole(role),
     createdAt: message.create_time ?? message.createdAt ?? message.created_at ?? null,
     parentId: node.parent ?? message.parent ?? null,
     textBlocks: extracted.blocks,
     omittedCount: extracted.omittedCount,
+    hidden,
   };
 }
 
@@ -283,6 +324,10 @@ export function normalizeConversation(raw) {
   }
 
   const omittedBlockCount = uniqueMessages.reduce((sum, message) => sum + message.omittedCount, 0);
+  const structuralNodeCount = nodes.filter((node) => !(Object.prototype.hasOwnProperty.call(node, 'message') && !node.message)).length;
+  const droppedNodeCount = Math.max(0, structuralNodeCount - messages.length);
+  const duplicateMessageCount = Math.max(0, messages.length - uniqueMessages.length);
+  const hiddenMessageCount = uniqueMessages.filter((message) => message.hidden).length;
   return {
     title,
     conversationId,
@@ -293,6 +338,9 @@ export function normalizeConversation(raw) {
       messageCount: uniqueMessages.length,
       omittedBlockCount,
       sourceNodeCount: nodes.length,
+      droppedNodeCount,
+      duplicateMessageCount,
+      hiddenMessageCount,
     },
   };
 }
@@ -370,10 +418,20 @@ function renderBlock(block) {
   }).join('');
 }
 
+function toDate(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const numeric = typeof value === 'number' ? value : (typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value) ? Number(value) : NaN);
+  const candidate = Number.isFinite(numeric) ? (numeric < 10_000_000_000 ? numeric * 1000 : numeric) : value;
+  const date = new Date(candidate);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function formatTimestamp(value) {
-  if (value === null || value === undefined || value === '') return '';
-  const date = new Date(typeof value === 'number' && value < 10_000_000_000 ? value * 1000 : value);
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+  return toDate(value)?.toLocaleString() ?? '';
+}
+
+function timestampIso(value) {
+  return toDate(value)?.toISOString() ?? '';
 }
 
 function messagePlainText(message) {
@@ -492,12 +550,15 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
   const messagesHtml = conversation.messages.map((message, index) => {
     const id = `m-${String(index + 1).padStart(4, '0')}`;
     const timestamp = formatTimestamp(message.createdAt);
+    const timestampValue = timestampIso(message.createdAt);
     const blocks = message.textBlocks.map(renderBlock).join('') || '<p class="empty-message">[empty message]</p>';
     const copyButton = '<button class="copy-btn" type="button">Copy</button>';
     if (message.role === 'user') {
       railItems.push(`<li><a href="#${id}"><span>${escapeHtml(railLabel(messagePlainText(message)))}</span></a></li>`);
     }
-    return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}" id="${id}" data-message-index="${index + 1}" data-message-id="${escapeAttribute(message.id)}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${timestamp ? `<span class="msg-time"><time datetime="${escapeAttribute(String(message.createdAt))}">${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
+    const hiddenClass = message.hidden ? ' message-hidden' : '';
+    const datetime = timestampValue ? ` datetime="${escapeAttribute(timestampValue)}"` : '';
+    return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}${hiddenClass}" id="${id}" data-message-index="${index + 1}" data-message-id="${escapeAttribute(message.id)}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${timestamp ? `<span class="msg-time"><time${datetime}>${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
   }).join('\n');
 
   const branchNote = conversation.activeBranch ? 'Active conversation branch exported.' : 'Message-array conversation exported.';
@@ -510,14 +571,20 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
     ? `<p class="meta flag-warn">${conversation.stats.omittedBlockCount} omitted non-text block${conversation.stats.omittedBlockCount === 1 ? '' : 's'}</p>`
     : '<p class="meta flag-ok">Text blocks complete</p>';
   const imageLine = Number.isFinite(conversation.stats.imageCount) && conversation.stats.imageCount > 0
-    ? `<p class="meta">Images: ${conversation.stats.imageEmbeddedCount ?? 0} embedded, ${conversation.stats.imageUnavailableCount ?? 0} unavailable</p>`
+    ? `<p class="meta">Images: ${conversation.stats.imageEmbeddedCount ?? 0} embedded, ${conversation.stats.imageUnavailableCount ?? 0} unavailable${Number(conversation.stats.imageBytes) > 0 ? ` · ${Math.ceil(Number(conversation.stats.imageBytes) / 1024)} KB embedded` : ''}</p>`
+    : '';
+  const coverageLine = (conversation.stats.droppedNodeCount ?? 0) > 0 || (conversation.stats.duplicateMessageCount ?? 0) > 0
+    ? `<p class="meta flag-warn">Coverage: ${conversation.stats.droppedNodeCount ?? 0} dropped node${conversation.stats.droppedNodeCount === 1 ? '' : 's'}, ${conversation.stats.duplicateMessageCount ?? 0} duplicate message${conversation.stats.duplicateMessageCount === 1 ? '' : 's'} removed</p>`
+    : '';
+  const hiddenLine = (conversation.stats.hiddenMessageCount ?? 0) > 0
+    ? `<p class="meta flag-warn">${conversation.stats.hiddenMessageCount} message${conversation.stats.hiddenMessageCount === 1 ? '' : 's'} marked hidden by ChatGPT; included unchanged</p>`
     : '';
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="generator" content="chatgpt-thread-archiver 0.4.1">
+<meta name="generator" content="chatgpt-thread-archiver 0.5.0">
 <meta name="exported-at" content="${escapeAttribute(exportedAt)}">
 ${idMeta}
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'">
@@ -534,18 +601,22 @@ ${metadata}
 ${sourceBlock}
   ${omissionLine}
   ${imageLine}
+  ${coverageLine}
+  ${hiddenLine}
   </header>
 <main>
 <section aria-label="Conversation messages">
 ${messagesHtml}
 </section>
-<footer class="export-footer">${escapeHtml(branchNote)} Generated locally by chatgpt-thread-archiver 0.4.1. This file was generated locally and is designed to work offline.</footer>
+<footer class="export-footer">${escapeHtml(branchNote)} Generated locally by chatgpt-thread-archiver 0.5.0. This file was generated locally and is designed to work offline.</footer>
 </main>
 </div>
 <script>${EXPORT_JS}</script>
 </body>
 </html>`;
 }
+
+const WINDOWS_DEVICE_NAME_RE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 
 export function sanitizeFilename(value, fallback = 'chatgpt-conversation') {
   const cleaned = String(value ?? '')
@@ -555,5 +626,6 @@ export function sanitizeFilename(value, fallback = 'chatgpt-conversation') {
     .trim()
     .replace(/[. ]+$/g, '')
     .slice(0, 120);
-  return cleaned || fallback;
+  if (!cleaned) return fallback;
+  return WINDOWS_DEVICE_NAME_RE.test(cleaned) ? `_${cleaned}` : cleaned;
 }

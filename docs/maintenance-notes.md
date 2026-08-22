@@ -2,11 +2,11 @@
 
 ## Client boundaries
 
-`src/chatgpt-client.mjs` owns route parsing, same-origin session access, token caching, token invalidation, candidate construction, endpoint allowlisting, account/workspace header discovery, and redacted diagnostics. Keep this logic isolated from normalization and rendering because ChatGPT’s internal web-app request paths and session response shape are undocumented and may change independently.
+`src/chatgpt-client.mjs` owns ChatGPT route parsing, same-origin session access, token caching, token invalidation, candidate construction, endpoint allowlisting, account/workspace header discovery, and redacted diagnostics. `src/claude-client.mjs` separately owns Claude route parsing, `lastActiveOrg` organization discovery, the organization-scoped conversation request, branch selection, text normalization, and redacted errors. Keep provider request logic isolated from normalization and rendering because both providers’ internal web-app request paths and response shapes are undocumented and may change independently.
 
 The access-token cache is intentionally short-lived: 60 seconds in memory only. A 401/403 causes one cache clear, one session refresh, and one retry. Do not add unbounded retry loops or persist the token. Visibility and observed route transitions clear the cache; the build does not monkeypatch history APIs. Session lookup failures remain distinct and user-visible.
 
-Resource hints are evidence only. They must remain same-origin, match the allowlisted conversation path shape, and be capped before request construction. Diagnostics should remain path-only and redacted; never log headers, cookies, response bodies, or full conversation IDs.
+Resource hints are evidence only. They must remain same-origin, match the allowlisted conversation path shape, and be capped before request construction. Claude organization and conversation values must be validated before URL construction. Diagnostics should remain path-only and redacted; never log headers, cookies, response bodies, or full conversation IDs.
 
 ## Renderer boundaries
 
@@ -24,9 +24,9 @@ Privacy preferences store only booleans under `chatgpt-thread-archiver-prefs`. T
 
 ## Validation debt
 
-The local fixtures can validate deterministic parsing and rendering but cannot prove that ChatGPT’s current session endpoint, auth headers, or response schema remain valid. Live browser acceptance is the user’s responsibility. When the live site changes, request a sanitized failure report containing only status, redacted paths, auth-context booleans, and schema-safe diagnostics.
+The local fixtures can validate deterministic parsing and rendering but cannot prove that ChatGPT’s or Claude.ai’s current session endpoint, auth/organization context, or response schema remain valid. Live browser acceptance is the user’s responsibility. When either live site changes, request a sanitized failure report containing only status, redacted paths, auth/organization-context booleans, and schema-safe diagnostics.
 
-The MVP intentionally isolates likely change points. If ChatGPT changes its URL structure, update `getConversationIdFromUrl()` in `src/chatgpt-client.mjs`. If the conversation request path or required request behavior changes, update `endpointCandidates()` and `fetchConversation()` in the same file. If the response fields or message-tree representation changes, update only the adapter functions in `src/core.mjs` and add a synthetic fixture before changing the renderer.
+The MVP intentionally isolates likely change points. If ChatGPT changes its URL structure, update `getConversationIdFromUrl()` in `src/chatgpt-client.mjs`; if its request path or required request behavior changes, update `endpointCandidates()` and `fetchConversation()` there. If Claude changes its URL structure, organization cookie, request path, or response shape, update only `src/claude-client.mjs`. If provider response fields or message-tree representation changes, add a synthetic fixture before changing the renderer.
 
 The HTML renderer should remain independent of ChatGPT’s CSS classes and DOM structure. Avoid replacing the structured-data path with viewport scraping merely because a selector is convenient. If a fallback is ever introduced, it must report that it is a DOM fallback and must not claim complete export unless it can verify completeness.
 

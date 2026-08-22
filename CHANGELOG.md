@@ -2,6 +2,20 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.6.0] — 2026-08-22
+
+### Added
+
+Added first-pass Claude.ai support for the currently open `/chat/<conversation-id>` route. The exporter reads Claude’s organization-scoped same-origin conversation response, follows the current message branch when the API provides a valid leaf, exports text and timestamps into the existing offline HTML format, and shows the detected conversation-level model when available.
+
+Claude’s v0.6 text path intentionally marks thinking, tool, file, and attachment content with visible omission markers rather than attempting rich-content or image handling. This keeps the first provider integration small, honest, and privacy-preserving while leaving room for a later Claude-specific richness pass.
+
+### Privacy and reliability
+
+Claude requests use the existing signed-in session cookie and the `lastActiveOrg` organization cookie. No credentials, cookies, signed URLs, raw conversation responses, or full IDs are written to diagnostics or exported HTML by default. The userscript remains local-only and makes no project-server or third-party conversation requests.
+
+Local fixtures and regression checks cover Claude route parsing, organization-scoped endpoint construction, authenticated request behavior, current-branch selection, model display, text formatting, unsupported-content markers, and conversation-ID privacy. Live Claude browser acceptance remains required because the endpoint is undocumented and session-dependent.
+
 ## [0.5.1] — 2026-08-22
 
 ### Fixed

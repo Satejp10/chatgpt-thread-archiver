@@ -146,7 +146,13 @@
     return { input, wrapper };
   }
 
-  function showExportOptions(button) {
+  function providerForLocation() {
+    if (isChatGPTHost() && isExporterRoute()) return 'ChatGPT';
+    if (isClaudeHost() && isClaudeExporterRoute()) return 'Claude';
+    return null;
+  }
+
+  function showExportOptions(button, provider) {
     if (document.getElementById(OPTIONS_ID)) return;
     const prefs = loadPrefs();
     const overlay = document.createElement('div');
@@ -156,7 +162,7 @@
     const card = document.createElement('div');
     card.className = 'cge-card';
     const heading = document.createElement('h2');
-    heading.textContent = 'Export ChatGPT conversation';
+    heading.textContent = `Export ${provider} conversation`;
     const intro = document.createElement('p');
     intro.textContent = 'Choose which identifying fields should be included in the offline HTML file.';
     const url = checkbox('cge-pref-url', 'Include the conversation URL', prefs.url);
@@ -195,24 +201,30 @@
     return sanitizeFilename(`chatgpt-export-${stamp}`);
   }
 
-  async function exportCurrentConversation(button, prefs = loadPrefs()) {
+  async function exportCurrentConversation(button, prefs = loadPrefs(), provider = providerForLocation()) {
     if (button?.dataset.state === 'busy') return;
+    if (!provider) {
+      showStatus('Export unavailable', 'Open a supported ChatGPT or Claude conversation first.', true);
+      return;
+    }
     if (button) {
       button.dataset.state = 'busy';
       button.textContent = 'Exporting…';
     }
 
     try {
-      const conversationId = getConversationIdFromUrl();
-      if (!conversationId) throw new ChatGPTClientError('missing-id', 'Open a ChatGPT conversation before exporting.');
-      showStatus('Loading conversation…', `Conversation ID: ${redactId(conversationId)}`);
-      const raw = await fetchConversation(conversationId);
+      const conversationId = provider === 'Claude' ? getClaudeConversationIdFromUrl() : getConversationIdFromUrl();
+      if (!conversationId) throw new Error(`Open a ${provider} conversation before exporting.`);
+      showStatus('Loading conversation…', `${provider} conversation ID: ${provider === 'Claude' ? redactClaudeId(conversationId) : redactId(conversationId)}`);
+      const raw = provider === 'Claude' ? await fetchClaudeConversation(conversationId) : await fetchConversation(conversationId);
       showStatus('Formatting messages…');
-      const normalized = normalizeConversation(raw);
-      const conversation = await resolveConversationImages(normalized, {
-        conversationId,
-        onProgress: (completed, total) => showStatus('Resolving images…', `${completed}/${total} image asset(s)`),
-      });
+      const normalized = provider === 'Claude' ? normalizeClaudeConversation(raw, conversationId) : normalizeConversation(raw);
+      const conversation = provider === 'Claude'
+        ? normalized
+        : await resolveConversationImages(normalized, {
+          conversationId,
+          onProgress: (completed, total) => showStatus('Resolving images…', `${completed}/${total} image asset(s)`),
+        });
       const exportedAt = new Date().toISOString();
       const html = renderConversationHtml(conversation, {
         exportedAt,
@@ -224,10 +236,11 @@
       const imageSummary = Number.isFinite(conversation.stats.imageCount) && conversation.stats.imageCount > 0
         ? ` ${conversation.stats.imageEmbeddedCount} image(s) embedded; ${conversation.stats.imageUnavailableCount} unavailable${conversation.stats.imageBudgetLimitedCount ? `; ${conversation.stats.imageBudgetLimitedCount} limited by export budget` : ''}.`
         : '';
-      showStatus('Download ready', `${conversation.stats.messageCount} message(s) exported; ${conversation.stats.omittedBlockCount} non-text block(s) omitted.${imageSummary}`);
+      showStatus('Download ready', `${conversation.stats.messageCount} ${provider} message(s) exported; ${conversation.stats.omittedBlockCount} unsupported block(s) marked.${imageSummary}`);
     } catch (error) {
-      showStatus('Export failed', describeClientError(error), true);
-      console.error('[ChatGPT Thread Archiver]', error?.code ?? 'unknown', describeClientError(error));
+      const description = provider === 'Claude' ? describeClaudeError(error) : describeClientError(error);
+      showStatus('Export failed', description, true);
+      console.error('[ChatGPT Thread Archiver]', error?.code ?? 'unknown', description);
     } finally {
       if (button) {
         button.dataset.state = 'idle';
@@ -237,16 +250,24 @@
   }
 
   function install() {
-    if (!isChatGPTHost() || !isExporterRoute()) return;
-    if (!document.body || document.getElementById(CONTROL_ID)) return;
-    installAuthCacheInvalidation();
+    const provider = providerForLocation();
+    const existing = document.getElementById(CONTROL_ID);
+    if (!provider) {
+      existing?.remove();
+      return;
+    }
+    if (!document.body) return;
+    if (existing?.dataset.provider === provider) return;
+    existing?.remove();
+    if (provider === 'ChatGPT') installAuthCacheInvalidation();
     addStyles();
     const button = document.createElement('button');
     button.id = CONTROL_ID;
+    button.dataset.provider = provider;
     button.type = 'button';
     button.textContent = 'Export HTML';
-    button.title = 'Export the currently open ChatGPT conversation as HTML';
-    button.addEventListener('click', () => showExportOptions(button));
+    button.title = `Export the currently open ${provider} conversation as HTML`;
+    button.addEventListener('click', () => showExportOptions(button, provider));
     document.body.appendChild(button);
   }
 

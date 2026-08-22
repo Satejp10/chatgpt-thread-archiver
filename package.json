@@ -1,9 +1,9 @@
 {
   "name": "chatgpt-chats-exporter-text-to-html-mvp",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
-  "description": "A local browser exporter for the currently open ChatGPT conversation.",
+  "description": "A local browser exporter for the currently open ChatGPT or Claude.ai conversation.",
   "scripts": {
     "build": "node build.mjs",
     "check": "node test.mjs"

@@ -1,0 +1,52 @@
+{
+  "name": "Claude text test",
+  "model": "claude-sonnet-4-20250514",
+  "current_leaf_message_uuid": "claude-a2",
+  "chat_messages": [
+    {
+      "uuid": "claude-root",
+      "parent_message_uuid": null,
+      "index": 0,
+      "sender": "human",
+      "created_at": "2026-08-22T10:00:00.000Z",
+      "content": [
+        { "type": "text", "text": "Explain **the plan**." }
+      ]
+    },
+    {
+      "uuid": "claude-a1",
+      "parent_message_uuid": "claude-root",
+      "index": 1,
+      "sender": "assistant",
+      "created_at": "2026-08-22T10:00:01.000Z",
+      "content": [
+        { "type": "thinking", "text": "private reasoning" },
+        { "type": "text", "text": "Here is the plan.\n\n```text\nstep one\n```" },
+        { "type": "tool_use", "name": "web_search", "input": {} }
+      ]
+    },
+    {
+      "uuid": "claude-a2",
+      "parent_message_uuid": "claude-a1",
+      "index": 2,
+      "sender": "human",
+      "created_at": "2026-08-22T10:00:02.000Z",
+      "content": [
+        { "type": "text", "text": "Thanks." }
+      ],
+      "files": [
+        { "file_name": "reference.pdf", "file_kind": "document" }
+      ]
+    },
+    {
+      "uuid": "claude-alt",
+      "parent_message_uuid": "claude-root",
+      "index": 3,
+      "sender": "assistant",
+      "created_at": "2026-08-22T10:00:03.000Z",
+      "content": [
+        { "type": "text", "text": "This regenerated branch should not be selected." }
+      ]
+    }
+  ]
+}

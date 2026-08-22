@@ -1,0 +1,81 @@
+# Developer handoff
+
+## Product summary
+
+ChatGPT Thread Archiver is an independent browser userscript that exports the currently open ChatGPT conversation to a self-contained offline HTML file. It uses the signed-in browser session and ChatGPT’s same-origin internal web-app requests to retrieve structured conversation data. It does not use DOM scraping for message content and does not send exported conversations to a project server.
+
+The current stable release is **v0.5.1** on `main`. The canonical installable file is `dist/chatgpt-chats-exporter.user.js`; the root `chatgpt-chats-exporter.user.js` is a byte-identical convenience copy.
+
+## First steps for a new maintainer
+
+Run these commands before changing anything:
+
+```bash
+git fetch --prune origin
+git switch main
+git pull --ff-only origin main
+npm run build
+npm run check
+node --check dist/chatgpt-chats-exporter.user.js
+cmp -s dist/chatgpt-chats-exporter.user.js chatgpt-chats-exporter.user.js
+git status --branch --short
+```
+
+Read these documents in this order:
+
+1. `README.md` for user-facing behavior and limitations.
+2. `docs/build-history.md` for reproducible build and release history.
+3. `docs/maintenance-notes.md` for boundaries that should not be casually changed.
+4. `docs/user-test-checklist.md` for live acceptance scenarios.
+5. `CHANGELOG.md` for version-by-version changes.
+
+## Source ownership
+
+| File | Owns | Safe change pattern |
+|---|---|---|
+| `src/chatgpt-client.mjs` | URL parsing, `/c/` and `/s/` activation, session context, token cache, endpoint candidates, account/workspace headers, diagnostics | Keep requests same-origin and bounded. Never log credentials or full IDs. |
+| `src/core.mjs` | Response normalization, active-branch traversal, content parsing, escaping, HTML generation, prompt rail | Add a fixture before changing response handling. Keep conversation text out of generated script source. |
+| `src/chatgpt-assets.mjs` | Image pointer resolution, metadata fallbacks, same-origin URL allowlist, image limits, data-URL conversion | Preserve per-image and total limits, explicit fallbacks, deduplication, and no third-party fetches. |
+| `src/exporter-ui.js` | In-page controls, privacy options, status messages, download, SPA reinsertion, mobile offsets | Keep injection route-scoped and avoid history API monkey-patching. |
+| `build.mjs` | Userscript metadata and dependency-free concatenation | Preserve module order and update the version here for releases. |
+| `test.mjs` | Deterministic regression checks | Add tests for every parser, renderer, route, privacy, and release invariant that changes. |
+
+## Important behavior invariants
+
+The exporter must remain active only on `chatgpt.com/c/*` and `chatgpt.com/s/*`. The runtime guard and userscript metadata must agree. The exporter should not inject on settings, home, image, project, or unrelated pages.
+
+Conversation text must come from the structured response path. Do not replace it with DOM scraping simply because the webpage DOM is convenient. The active mapping branch is selected through the current node when available; fallback leaves are childless message nodes ranked chronologically when timestamps allow it.
+
+When both `content.parts` and `content.content` are available, a non-empty `content.parts` collection wins and repeated values are deduplicated. Ordinary user and assistant text must preserve literal escape sequences. Decoding is reserved for structured tool payloads and explicit tool line markers.
+
+Unsupported content and non-image attachments must leave visible omission markers. Mapping drops, duplicate messages, hidden-by-ChatGPT messages, and image budget omissions must be represented in export diagnostics rather than silently disappearing.
+
+Images are best-effort. The resolver accepts only approved same-origin Estuary content URLs, has a 3 MiB per-image cap, a 12 MiB total embedded-image cap, and a 64-image embedded-count cap. Failed, expired, oversized, unsupported, or budget-limited images must produce explicit fallback markers.
+
+The exported file must work offline. Keep its restrictive CSP, inline-only rendering resources, `img-src data:`, and no third-party network dependency. Never embed tokens, cookies, signed URLs, or conversation identifiers unless the user explicitly enables the existing privacy option for supported metadata.
+
+## Privacy and security boundaries
+
+The userscript has no analytics, telemetry, project server, remote logging, or third-party API calls. Do not add any of these without an explicit product decision and a new privacy review.
+
+Diagnostics may contain only sanitized route shapes, allowed endpoint paths, status categories, auth-context booleans, and schema-safe property names. Never commit raw HAR files, response bodies, request headers, cookies, bearer tokens, signed URLs, full conversation IDs, or user chat content.
+
+The current userscript has no extension ID or web-accessible extension resources. If a future browser extension is created, request only the required ChatGPT/Claude host access, expose no web-accessible resources unless essential, and avoid broad permissions such as `tabs`, `history`, `cookies`, and `webRequest` unless the product explicitly requires them.
+
+## Testing boundaries
+
+Local checks do not log into ChatGPT and cannot prove that live undocumented endpoints, account permissions, image assets, or mobile layouts still work. The product owner performs live browser and offline-file testing. Do not claim user acceptance based only on `npm run check`.
+
+For live failures, request only sanitized evidence: browser and version, supported host, redacted route shape, visible error, HTTP status, and safe schema/property names. Do not request credentials, headers, cookies, raw response bodies, or full IDs.
+
+## Release and branch process
+
+Create feature branches from the current `main`. Do not push feature work directly to `main`. Run all checks, commit the smallest scoped change, push the branch, open a pull request against `main`, and merge only after review or explicit product-owner approval.
+
+For any version change, synchronize the package manifest, build banner, generated HTML provenance, README, changelog, checklist, tests, `dist/` artifact, and root convenience artifact. Confirm the root and `dist/` files are byte-identical.
+
+## Current next work areas
+
+Text formatting quality is the most likely next product-quality area. Remaining image misses should be investigated with sanitized evidence and should not be described as fully solved without live confirmation. Claude.ai support is a separate future project: reuse the general exporter idea where practical, but investigate Claude’s own endpoints and response format independently.
+
+Do not begin one of these projects automatically. Confirm the product owner’s priority first.

@@ -1,0 +1,35 @@
+{
+  "conversation_id": "44444444-4444-4444-8444-444444444444",
+  "title": "Image test chat",
+  "mapping": {
+    "root": {
+      "id": "root",
+      "parent": null,
+      "children": ["image-1"],
+      "message": null
+    },
+    "image-1": {
+      "id": "image-1",
+      "parent": "root",
+      "children": [],
+      "message": {
+        "id": "image-1",
+        "author": { "role": "user" },
+        "content": {
+          "parts": [
+            {
+              "content_type": "image_asset_pointer",
+              "asset_pointer": "file-service://file-test-image",
+              "size_bytes": 4,
+              "width": 2,
+              "height": 2,
+              "metadata": {}
+            },
+            "Reference image"
+          ]
+        }
+      }
+    }
+  },
+  "current_node": "image-1"
+}

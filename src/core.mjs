@@ -135,6 +135,20 @@ function normalizePart(candidate, depth = 0) {
   if (!isPlainObject(value)) return { kind: 'omitted', reason: 'non-text content part' };
 
   const type = String(value.content_type ?? value.type ?? value.kind ?? '').toLowerCase();
+  if (typeof value.asset_pointer === 'string' && type.includes('image')) {
+    const metadata = isPlainObject(value.metadata) ? value.metadata : {};
+    return {
+      kind: 'image',
+      asset: {
+        pointer: value.asset_pointer,
+        mimeType: value.mime_type ?? '',
+        sizeBytes: Number.isFinite(value.size_bytes) ? value.size_bytes : null,
+        width: Number.isFinite(value.width) ? value.width : null,
+        height: Number.isFinite(value.height) ? value.height : null,
+        generated: Boolean(metadata.dalle || metadata.generation),
+      },
+    };
+  }
   const directText = [value.text, value.value, value.content].find((item) => typeof item === 'string');
   if (directText !== undefined && (type === '' || type.includes('text') || type.includes('code') || type.includes('output'))) {
     return { kind: type.includes('code') ? 'code' : 'text', text: directText, language: value.language ?? value.lang ?? '' };
@@ -166,6 +180,10 @@ export function extractTextBlocks(message) {
     if (item.kind === 'omitted') {
       omittedCount += 1;
       blocks.push({ type: 'omitted', reason: item.reason });
+      continue;
+    }
+    if (item.kind === 'image') {
+      blocks.push({ type: 'image', asset: item.asset });
       continue;
     }
     const text = String(item.text ?? '');
@@ -329,6 +347,16 @@ export function textToBlocks(text) {
 
 function renderBlock(block) {
   if (block.type === 'omitted') return `<p class="omitted">[non-text content omitted: ${escapeHtml(block.reason)}]</p>`;
+  if (block.type === 'image') {
+    const asset = block.asset ?? {};
+    if (asset.status === 'embedded' && typeof asset.dataUrl === 'string' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(asset.dataUrl)) {
+      const dimensions = Number.isFinite(asset.width) && Number.isFinite(asset.height) ? ` width="${escapeAttribute(String(Math.min(asset.width, 10000)))}" height="${escapeAttribute(String(Math.min(asset.height, 10000)))}"` : '';
+      const label = asset.generated ? 'Generated image' : 'Uploaded/reference image';
+      const size = Number.isFinite(asset.byteLength) ? ` · ${Math.round(asset.byteLength / 1024)} KB embedded` : '';
+      return `<figure class="image-block"><img src="${escapeAttribute(asset.dataUrl)}" alt="${label}"${dimensions} loading="lazy"><figcaption>${label}${size}</figcaption></figure>`;
+    }
+    return `<p class="omitted">[image unavailable: ${escapeHtml(asset.reason || 'asset expired or inaccessible')}]</p>`;
+  }
   if (block.type === 'code') {
     const language = block.language ? ` data-language="${escapeAttribute(block.language)}"` : '';
     return `<pre class="code-block"${language}><code>${escapeHtml(block.text ?? '')}</code></pre>`;
@@ -385,6 +413,10 @@ header.export-head { margin-bottom: 24px; }
 .content p { margin: 0 0 12px; }
 .content p:last-child { margin-bottom: 0; }
 .content code { background: rgb(175 184 193 / .2); padding: .15em .35em; border-radius: 4px; font-size: .9em; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.image-block { margin: 14px 0; text-align: center; }
+.image-block img { display: inline-block; max-width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--border); background: #fff; }
+.image-block figcaption { margin-top: 6px; color: var(--muted); font-size: .82em; }
+
 .content pre { white-space: pre; overflow-x: auto; background: #1f2328; color: #e6edf3; padding: 12px 14px; border-radius: 6px; margin: 12px 0; }
 .content pre code { background: none; padding: 0; color: inherit; font-size: .88em; }
 .omitted, .empty-message { color: var(--muted); font-style: italic; }
@@ -477,12 +509,15 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
   const omissionLine = conversation.stats.omittedBlockCount > 0
     ? `<p class="meta flag-warn">${conversation.stats.omittedBlockCount} omitted non-text block${conversation.stats.omittedBlockCount === 1 ? '' : 's'}</p>`
     : '<p class="meta flag-ok">Text blocks complete</p>';
+  const imageLine = Number.isFinite(conversation.stats.imageCount) && conversation.stats.imageCount > 0
+    ? `<p class="meta">Images: ${conversation.stats.imageEmbeddedCount ?? 0} embedded, ${conversation.stats.imageUnavailableCount ?? 0} unavailable</p>`
+    : '';
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="generator" content="chatgpt-thread-archiver 0.3.3">
+<meta name="generator" content="chatgpt-thread-archiver 0.4.1">
 <meta name="exported-at" content="${escapeAttribute(exportedAt)}">
 ${idMeta}
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'">
@@ -497,13 +532,14 @@ ${idMeta}
 <h1>${title}</h1>
 ${metadata}
 ${sourceBlock}
-${omissionLine}
-</header>
+  ${omissionLine}
+  ${imageLine}
+  </header>
 <main>
 <section aria-label="Conversation messages">
 ${messagesHtml}
 </section>
-<footer class="export-footer">${escapeHtml(branchNote)} Generated locally by chatgpt-thread-archiver 0.3.3. This file was generated locally and is designed to work offline.</footer>
+<footer class="export-footer">${escapeHtml(branchNote)} Generated locally by chatgpt-thread-archiver 0.4.1. This file was generated locally and is designed to work offline.</footer>
 </main>
 </div>
 <script>${EXPORT_JS}</script>

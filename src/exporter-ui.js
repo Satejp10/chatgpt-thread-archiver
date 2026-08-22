@@ -204,7 +204,11 @@
       showStatus('Loading conversation…', `Conversation ID: ${redactId(conversationId)}`);
       const raw = await fetchConversation(conversationId);
       showStatus('Formatting messages…');
-      const conversation = normalizeConversation(raw);
+      const normalized = normalizeConversation(raw);
+      const conversation = await resolveConversationImages(normalized, {
+        conversationId,
+        onProgress: (completed, total) => showStatus('Resolving images…', `${completed}/${total} image asset(s)`),
+      });
       const exportedAt = new Date().toISOString();
       const html = renderConversationHtml(conversation, {
         exportedAt,
@@ -213,7 +217,10 @@
         includeTitle: prefs.title,
       });
       downloadHtml(html, filenameFor(conversation, prefs, exportedAt));
-      showStatus('Download ready', `${conversation.stats.messageCount} message(s) exported; ${conversation.stats.omittedBlockCount} non-text block(s) omitted.`);
+      const imageSummary = Number.isFinite(conversation.stats.imageCount) && conversation.stats.imageCount > 0
+        ? ` ${conversation.stats.imageEmbeddedCount} image(s) embedded; ${conversation.stats.imageUnavailableCount} unavailable.`
+        : '';
+      showStatus('Download ready', `${conversation.stats.messageCount} message(s) exported; ${conversation.stats.omittedBlockCount} non-text block(s) omitted.${imageSummary}`);
     } catch (error) {
       showStatus('Export failed', describeClientError(error), true);
       console.error('[ChatGPT Thread Archiver]', error?.code ?? 'unknown', describeClientError(error));

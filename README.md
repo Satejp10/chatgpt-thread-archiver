@@ -7,20 +7,22 @@ This project is **ChatGPT Thread Archiver**, a local browser exporter for the **
 | Supported now | Deferred until the text path is confirmed |
 |---|---|
 | One currently open conversation | Bulk/all-chat export |
-| User and assistant text messages | Attachments, images, files, citations, canvas, and tool artifacts |
+| User and assistant text messages, plus image asset pointers | Arbitrary attachments/files, citations, canvas, and tool artifacts |
 | Active root-to-leaf conversation branch | Exporting every regenerated branch |
 | Paragraphs, line breaks, inline emphasis, inline code, fenced code | Full Markdown compatibility |
 | Self-contained offline HTML | Browser-extension store packaging |
 | Prompt navigation rail, copy buttons, and role counts | Claude support and DOM auto-scroll |
 | Explicit omission counts and failure diagnostics | Official ZIP/conversations.json import |
 
-Unsupported non-text blocks are represented with visible omission markers and counted in the exported HTML. The exporter deliberately fails instead of generating a successful-looking partial file when the conversation response cannot be recognized.
+Unsupported non-text blocks are represented with visible omission markers and counted in the exported HTML. Recognized image asset pointers are resolved through same-origin ChatGPT file metadata and signed content URLs, then embedded as `data:` URLs so the result remains self-contained offline. Only image MIME types are accepted, each embedded image is capped at 3 MiB, and expired, inaccessible, oversized, or unsupported assets receive an explicit `[image unavailable: ...]` marker rather than being silently omitted. The exporter deliberately fails instead of generating a successful-looking partial file when the conversation response cannot be recognized.
 
 ## Privacy and security
 
 The exporter runs locally in the browser. It does not ask for a password, upload conversation data, call a third-party service, or persist conversation content. It obtains the current session access token only through the same-origin ChatGPT session endpoint, keeps it in memory for at most 60 seconds, clears it on hidden-tab and observed route-change events, and performs at most one refresh retry after a 401/403 response. Session lookup failures distinguish signed-out, rate-limited, network, timeout, malformed-response, and missing-token cases.
 
 Resource-derived request paths are restricted to the current page origin, an allowlisted conversation path shape, and a maximum of four candidates. Conversation IDs are redacted in diagnostics. The optional conversation-ID metadata field is disabled by default. The status panel is built with DOM nodes and `textContent`; page-side `innerHTML` is not used.
+
+Image resolution is best-effort and occurs only while exporting the currently open conversation. It does not upload data or call third-party hosts: metadata and signed image bytes are requested only from the current ChatGPT page origin. The original asset pointer is not written to the exported HTML; the file contains only the embedded image data or an explanatory fallback marker.
 
 The exported file includes a restrictive Content Security Policy:
 
@@ -32,13 +34,13 @@ The small inline script exists only for offline navigation and copy interactions
 
 Click the floating **Export HTML** button and choose whether to include the conversation URL, title, and conversation-ID metadata. Disabled fields are omitted entirely, not written blank. The title is also used in the filename when enabled; otherwise the filename falls back to a timestamped `chatgpt-export-...` name.
 
-The generated HTML follows the older thread-export archive style: a compact light 820 px layout, GitHub-like metadata, white message cards, lavender user cards, dark code blocks, and teal Copy controls. The renderer uses real paragraphs and line breaks, so it intentionally does not apply `white-space: pre-wrap` to the message content. Each export identifies itself with `chatgpt-thread-archiver 0.3.3` in metadata and the footer.
+The generated HTML follows the older thread-export archive style: a compact light 820 px layout, GitHub-like metadata, white message cards, lavender user cards, dark code blocks, and teal Copy controls. The renderer uses real paragraphs and line breaks, so it intentionally does not apply `white-space: pre-wrap` to the message content. Each export identifies itself with `chatgpt-thread-archiver 0.4.1` in metadata and the footer. When images are present, the header reports embedded and unavailable image counts.
 
 The generated HTML includes a right-edge prompt rail with one entry per user prompt. The rail supports hover/focus previews, scrollspy, `j`/`k`/`n`/`p` keyboard navigation, Alt-arrow alternatives, a hide toggle persisted in `sessionStorage`, and a plain ordered-link fallback when JavaScript is disabled. Each message also has a local **Copy** button, and the header reports counts by role.
 
 ## Run it in a browser
 
-Install the bundled `dist/chatgpt-chats-exporter.user.js` in Tampermonkey or Violentmonkey. Because the 0.3.0 name and namespace changed to `ChatGPT Thread Archiver` and `local.chatgpt-thread-archiver`, delete the old userscript entry manually before reinstalling this build. Save the script, open or refresh a ChatGPT conversation while signed in, and use the floating **Export HTML** button.
+Install the bundled `dist/chatgpt-chats-exporter.user.js` in Tampermonkey or Violentmonkey. Because the 0.3.0 name and namespace changed to `ChatGPT Thread Archiver` and `local.chatgpt-thread-archiver`, delete the old userscript entry manually before reinstalling this build. The 0.4.1 image resolver is included in the generated bundle. Save the script, open or refresh a ChatGPT conversation while signed in, and use the floating **Export HTML** button.
 
 The generated file can be opened offline. To verify the offline boundary, open the file with network access disabled or with the browser’s network panel visible and confirm that it remains readable without external assets. The CSP and static script remain unchanged by the visual port.
 
@@ -52,7 +54,7 @@ npm run check
 node --check dist/chatgpt-chats-exporter.user.js
 ```
 
-`npm run build` creates `dist/chatgpt-chats-exporter.user.js`. `npm run check` validates the response adapter, active-branch traversal, escaping, formatting, prompt rail, metadata privacy, recursion limits, route parsing, endpoint construction, filename sanitization, 0.3.0 hardening invariants, and expected failure behavior using local fixtures. These checks do not log into ChatGPT and do not replace the user’s live browser testing.
+`npm run build` creates `dist/chatgpt-chats-exporter.user.js`. `npm run check` validates the response adapter, active-branch traversal, escaping, formatting, image normalization and rendering, prompt rail, metadata privacy, recursion limits, route parsing, endpoint construction, filename sanitization, 0.4.1 image-resolver invariants, and expected failure behavior using local fixtures. These checks do not log into ChatGPT and do not replace the user’s live browser testing.
 
 ## User testing
 
@@ -65,6 +67,7 @@ When reporting a failure, include only sanitized diagnostics: browser/version, C
 ```text
 src/core.mjs              Normalization, bounded content parsing, escaping, and HTML rendering
 src/chatgpt-client.mjs    Route detection, token lifecycle, same-origin request, and diagnostics
+src/chatgpt-assets.mjs    Same-origin image metadata/content resolution and data-URL embedding
 src/exporter-ui.js        In-page controls, privacy options, status panel, and local download
 build.mjs                 Dependency-free userscript bundler
 fixtures/                 Synthetic conversation response fixtures
@@ -75,6 +78,6 @@ dist/                     Generated userscript
 
 ## Known limitations
 
-The internal ChatGPT endpoint and session response are undocumented web-app interfaces and may change. Version 0.3.1 restores a bounded `__NEXT_DATA__` text scan because some authenticated/workspace conversation requests require account context. Version 0.3.2 tries the alternate conversation request after an HTTP 400 instead of stopping at the first candidate. Version 0.3.3 decodes escaped tool/resource payloads and renders structured output as readable text or JSON code. GitHub branch/commit/PR delivery is intentionally deferred while GitHub is unavailable; the attached local build is ready for testing. Authentication, rate limiting, workspace permissions, archived chats, project-specific access, or endpoint changes can produce different results. The adapter exports the active branch only. The prompt rail is user-only by design. Rich non-text content is marked rather than interpreted.
+The internal ChatGPT endpoint and session response are undocumented web-app interfaces and may change. Version 0.3.1 restores a bounded `__NEXT_DATA__` text scan because some authenticated/workspace conversation requests require account context. Version 0.3.2 tries the alternate conversation request after an HTTP 400 instead of stopping at the first candidate. Version 0.3.3 decodes escaped tool/resource payloads and renders structured output as readable text or JSON code. Version 0.4.0 resolves supported image asset pointers on a best-effort basis, embeds images up to 3 MiB as data URLs, and marks unavailable assets explicitly. Version 0.4.1 matches the current query-bearing `/backend-api/files/<file>/<conversation>` metadata request before trying older fallback forms, improving recovery for images whose metadata is not returned by the legacy path. Authentication, rate limiting, workspace permissions, archived chats, project-specific access, expired assets, or endpoint changes can produce different results. The adapter exports the active branch only. The prompt rail is user-only by design. Arbitrary files and other rich non-text content remain marked rather than interpreted.
 
 For stable account-wide backup, use OpenAI’s supported Data Controls export workflow separately. This project is optimized for a quick, private export of the conversation currently open in the browser.

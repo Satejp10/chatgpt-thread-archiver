@@ -30,6 +30,8 @@
       #${OPTIONS_ID} label { display: flex; gap: 9px; align-items: flex-start; margin: 10px 0; cursor: pointer; }
       #${OPTIONS_ID} input { margin-top: 3px; }
       #${OPTIONS_ID} .cge-actions { display: flex; gap: 9px; justify-content: flex-end; margin-top: 20px; }
+      #${OPTIONS_ID} fieldset { max-height: min(60vh, 520px); overflow: auto; margin: 16px 0 0; padding: 8px 12px; border: 1px solid rgb(156 163 175 / .45); border-radius: 9px; }
+      #${OPTIONS_ID} legend { padding: 0 5px; font-weight: 700; }
       #${OPTIONS_ID} button { border: 0; border-radius: 8px; padding: 9px 13px; cursor: pointer; font: inherit; }
       #${OPTIONS_ID} .cge-primary { background: #111827; color: white; }
       #${OPTIONS_ID} .cge-secondary { background: rgb(127 127 127 / .16); color: CanvasText; }
@@ -76,7 +78,7 @@
   }
 
   function defaultPrefs() {
-    return { url: true, title: true, conversationId: false };
+    return { url: true, title: true, conversationId: false, imageMode: 'all' };
   }
 
   function parsePrefs(raw) {
@@ -85,7 +87,8 @@
       const value = JSON.parse(raw);
       const keys = ['url', 'title', 'conversationId'];
       if (!value || typeof value !== 'object' || keys.some((key) => typeof value[key] !== 'boolean')) return null;
-      return { url: value.url, title: value.title, conversationId: value.conversationId };
+      const imageMode = ['all', 'none', 'choose'].includes(value.imageMode) ? value.imageMode : 'all';
+      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode };
     } catch {
       return null;
     }
@@ -127,6 +130,7 @@
         url: Boolean(prefs.url),
         title: Boolean(prefs.title),
         conversationId: Boolean(prefs.conversationId),
+        imageMode: ['all', 'none', 'choose'].includes(prefs.imageMode) ? prefs.imageMode : 'all',
       }));
     } catch {
       // Preference persistence is optional and must never block an export.
@@ -146,10 +150,98 @@
     return { input, wrapper };
   }
 
+  function radio(name, id, label, value, checked) {
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = name;
+    input.id = id;
+    input.value = value;
+    input.checked = checked;
+    const text = document.createElement('span');
+    text.textContent = label;
+    const wrapper = document.createElement('label');
+    wrapper.htmlFor = id;
+    wrapper.append(input, text);
+    return { input, wrapper };
+  }
+
   function providerForLocation() {
     if (isChatGPTHost() && isExporterRoute()) return 'ChatGPT';
     if (isClaudeHost() && isClaudeExporterRoute()) return 'Claude';
     return null;
+  }
+
+  function imageEntries(conversation) {
+    let index = 0;
+    let turnIndex = 0;
+    const entries = [];
+    for (const message of (conversation?.messages ?? [])) {
+      if (message.role !== 'unknown') turnIndex += 1;
+      for (const block of message.textBlocks ?? []) {
+        if (block.type !== 'image') continue;
+        entries.push({
+          index: index++,
+          messageIndex: turnIndex,
+          speaker: message.authorLabel ?? (message.role === 'user' ? 'You' : 'ChatGPT'),
+          generated: Boolean(block.asset?.generated),
+          sizeBytes: Number.isFinite(block.asset?.sizeBytes) ? block.asset.sizeBytes : null,
+        });
+      }
+    }
+    return entries;
+  }
+
+  function formatImageSize(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) return 'size unknown';
+    if (bytes < 1024) return `${bytes} B`;
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+
+  function showImageSelection(conversation) {
+    const entries = imageEntries(conversation);
+    if (entries.length === 0) return Promise.resolve(new Set());
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.id = OPTIONS_ID;
+      overlay.setAttribute('role', 'dialog');
+      overlay.setAttribute('aria-modal', 'true');
+      const card = document.createElement('div');
+      card.className = 'cge-card';
+      const heading = document.createElement('h2');
+      heading.textContent = 'Choose images to include';
+      const intro = document.createElement('p');
+      intro.textContent = 'Images are selected by default. Unselected images will not be downloaded and will be marked as excluded in the HTML.';
+      const fieldset = document.createElement('fieldset');
+      const legend = document.createElement('legend');
+      legend.textContent = `${entries.length} image${entries.length === 1 ? '' : 's'} found`;
+      fieldset.appendChild(legend);
+      const inputs = [];
+      for (const entry of entries) {
+        const image = checkbox(`cge-image-${entry.index}`, `Image ${entry.index + 1} · message ${entry.messageIndex} · ${entry.speaker} · ${entry.generated ? 'generated' : 'uploaded/reference'} · ${formatImageSize(entry.sizeBytes)}`, true);
+        image.input.dataset.imageIndex = String(entry.index);
+        inputs.push(image.input);
+        fieldset.appendChild(image.wrapper);
+      }
+      const actions = document.createElement('div');
+      actions.className = 'cge-actions';
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'cge-secondary';
+      cancel.textContent = 'Cancel';
+      const continueButton = document.createElement('button');
+      continueButton.type = 'button';
+      continueButton.className = 'cge-primary';
+      continueButton.textContent = 'Export selected';
+      actions.append(cancel, continueButton);
+      card.append(heading, intro, fieldset, actions);
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+      const close = (selection) => { overlay.remove(); resolve(selection); };
+      cancel.addEventListener('click', () => close(null));
+      overlay.addEventListener('click', (event) => { if (event.target === overlay) close(null); });
+      continueButton.addEventListener('click', () => close(new Set(inputs.filter((input) => input.checked).map((input) => Number(input.dataset.imageIndex)))));
+      continueButton.focus();
+    });
   }
 
   function showExportOptions(button, provider) {
@@ -164,10 +256,23 @@
     const heading = document.createElement('h2');
     heading.textContent = `Export ${provider} conversation`;
     const intro = document.createElement('p');
-    intro.textContent = 'Choose which identifying fields should be included in the offline HTML file.';
+    intro.textContent = 'Choose which identifying fields and images should be included in the offline HTML file.';
     const url = checkbox('cge-pref-url', 'Include the conversation URL', prefs.url);
     const title = checkbox('cge-pref-title', 'Include the conversation title and use it in the filename', prefs.title);
     const conversationId = checkbox('cge-pref-conversation-id', 'Include the conversation ID in the HTML metadata', prefs.conversationId);
+    const imageChoices = [];
+    let imageFieldset = null;
+    if (provider === 'ChatGPT') {
+      imageFieldset = document.createElement('fieldset');
+      const imageLegend = document.createElement('legend');
+      imageLegend.textContent = 'Images';
+      imageFieldset.appendChild(imageLegend);
+      for (const choice of [['all', 'Include all images'], ['none', 'Exclude all images'], ['choose', 'Choose images after loading the conversation']]) {
+        const imageRadio = radio('cge-image-mode', `cge-image-mode-${choice[0]}`, choice[1], choice[0], prefs.imageMode === choice[0]);
+        imageChoices.push(imageRadio.input);
+        imageFieldset.appendChild(imageRadio.wrapper);
+      }
+    }
     const actions = document.createElement('div');
     actions.className = 'cge-actions';
     const cancel = document.createElement('button');
@@ -179,7 +284,9 @@
     exportButton.className = 'cge-primary';
     exportButton.textContent = 'Export HTML';
     actions.append(cancel, exportButton);
-    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper, actions);
+    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper);
+    if (imageFieldset) card.appendChild(imageFieldset);
+    card.appendChild(actions);
     overlay.appendChild(card);
     document.body.appendChild(overlay);
 
@@ -187,10 +294,15 @@
     cancel.addEventListener('click', close);
     overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
     exportButton.addEventListener('click', () => {
-      const chosen = { url: url.input.checked, title: title.input.checked, conversationId: conversationId.input.checked };
+      const chosen = {
+        url: url.input.checked,
+        title: title.input.checked,
+        conversationId: conversationId.input.checked,
+        imageMode: provider === 'ChatGPT' ? (imageChoices.find((input) => input.checked)?.value ?? prefs.imageMode) : prefs.imageMode,
+      };
       savePrefs(chosen);
       close();
-      exportCurrentConversation(button, chosen);
+      exportCurrentConversation(button, chosen, provider);
     });
     exportButton.focus();
   }
@@ -219,24 +331,42 @@
       const raw = provider === 'Claude' ? await fetchClaudeConversation(conversationId) : await fetchConversation(conversationId);
       showStatus('Formatting messages…');
       const normalized = provider === 'Claude' ? normalizeClaudeConversation(raw, conversationId) : normalizeConversation(raw);
+      let selectedImageIndices = null;
+      let includeImages = true;
+      if (provider === 'ChatGPT') {
+        includeImages = prefs.imageMode !== 'none';
+        if (prefs.imageMode === 'choose') {
+          showStatus('Choose images…', 'Review the available images before any image downloads begin.');
+          selectedImageIndices = await showImageSelection(normalized);
+          if (selectedImageIndices === null) {
+            showStatus('Export cancelled');
+            return;
+          }
+        }
+      }
       const conversation = provider === 'Claude'
         ? normalized
         : await resolveConversationImages(normalized, {
           conversationId,
-          onProgress: (completed, total) => showStatus('Resolving images…', `${completed}/${total} image asset(s)`),
+          includeImages,
+          selectedImageIndices,
+          onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
         });
+      const exportStats = deriveExportStats(conversation.messages, conversation.stats, { model: conversation.model });
+      const exportableConversation = { ...conversation, stats: exportStats };
       const exportedAt = new Date().toISOString();
-      const html = renderConversationHtml(conversation, {
+      const html = renderConversationHtml(exportableConversation, {
         exportedAt,
         sourceUrl: prefs.url ? globalThis.location?.href : null,
         includeConversationId: prefs.conversationId,
         includeTitle: prefs.title,
       });
-      downloadHtml(html, filenameFor(conversation, prefs, exportedAt));
-      const imageSummary = Number.isFinite(conversation.stats.imageCount) && conversation.stats.imageCount > 0
-        ? ` ${conversation.stats.imageEmbeddedCount} image(s) embedded; ${conversation.stats.imageUnavailableCount} unavailable${conversation.stats.imageBudgetLimitedCount ? `; ${conversation.stats.imageBudgetLimitedCount} limited by export budget` : ''}.`
+      downloadHtml(html, filenameFor(exportableConversation, prefs, exportedAt));
+      const imageSummary = Number.isFinite(exportStats.imageCount) && exportStats.imageCount > 0
+        ? ` ${exportStats.imageEmbeddedCount} image(s) embedded; ${exportStats.imageUnavailableCount} unavailable${exportStats.imageBudgetLimitedCount ? `; ${exportStats.imageBudgetLimitedCount} limited by export budget` : ''}.`
         : '';
-      showStatus('Download ready', `${conversation.stats.messageCount} ${provider} message(s) exported; ${conversation.stats.omittedBlockCount} unsupported block(s) marked.${imageSummary}`);
+      const localStats = `${exportStats.wordCount.toLocaleString('en-US')} words and ${exportStats.characterCount.toLocaleString('en-US')} characters counted locally.`;
+      showStatus('Download ready', `${exportStats.messageCount} ${provider} message(s) exported; ${exportStats.omittedBlockCount} unsupported block(s) marked.${imageSummary} ${localStats}`);
     } catch (error) {
       const description = provider === 'Claude' ? describeClaudeError(error) : describeClientError(error);
       showStatus('Export failed', description, true);

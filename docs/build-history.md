@@ -7,8 +7,8 @@ This document is the maintainer-facing build record for **ChatGPT Thread Archive
 | Item | Value |
 |---|---|
 | Stable branch | `main` |
-| Current release | `v0.5.1` |
-| Latest stable merge commit | `b432ab28ed339dd7621ecbe98b97a59504e10b2d` |
+| Current release | `v0.6.0` |
+| Latest stable merge commit | `549ec4c4bfb44fc5138a0e377ee2b041b246580e` |
 | Canonical installable artifact | `dist/chatgpt-chats-exporter.user.js` |
 | Root convenience artifact | `chatgpt-chats-exporter.user.js` |
 | Artifact rule | Root and `dist/` userscripts must be byte-identical |
@@ -41,13 +41,15 @@ The build output is generated from `src/` by `build.mjs`. Do not edit `dist/chat
 cp -f dist/chatgpt-chats-exporter.user.js chatgpt-chats-exporter.user.js
 ```
 
-The current bundling order is important. `build.mjs` concatenates `src/core.mjs`, `src/chatgpt-client.mjs`, `src/claude-client.mjs`, `src/chatgpt-assets.mjs`, and `src/exporter-ui.js` into one userscript IIFE. The asset module relies on helper functions defined earlier in the concatenated client module.
+The current bundling order is important. `build.mjs` concatenates `src/core.mjs`, `src/chatgpt-client.mjs`, `src/claude-client.mjs`, `src/chatgpt-assets.mjs`, `src/export-stats.mjs`, and `src/exporter-ui.js` into one userscript IIFE. The asset module relies on helper functions defined earlier in the concatenated client module, and the UI relies on the statistics helper.
 
 ## Release milestones
 
 | Release | Main purpose | Validation status | Release state |
 |---|---|---|---|
-| `v0.6.0` | Basic Claude.ai text export, shared model display, provider-scoped activation | Local build/check completed; live Claude testing remains | Candidate on feature branch |
+| `v0.8.0` | Per-export ChatGPT image choices: include all, exclude all, or choose individual images | Local build/check pending final validation; live image-choice testing remains | Candidate on feature branch |
+| `v0.7.0` | Expanded ChatGPT image recovery and safe local export statistics | Local build/check completed; live image testing remains | Candidate on feature branch |
+| `v0.6.0` | Basic Claude.ai text export, shared model display, provider-scoped activation | Local build/check completed; live Claude testing completed by product owner | **Current stable release** |
 | `v0.1.0` | API-based conversation exporter MVP | Local build/check completed during initial implementation | Historical |
 | `v0.2.0` | Legacy-style UI, prompt rail, copy controls, privacy preferences, security hardening | Local build/check completed | Historical |
 | `v0.3.0` | Thread Archiver rename, preference migration, bounded JSON handling, rail fixes | Local build/check completed | Historical |
@@ -58,11 +60,39 @@ The current bundling order is important. `build.mjs` concatenates `src/core.mjs`
 | `v0.4.1` | Query-bearing image metadata route and `post_id` fallback | Local build/check completed | Historical |
 | `v0.4.2` | Bounded nested signed-URL discovery for image metadata | Local build/check completed | Historical |
 | `v0.5.0` | Audit remediation: structured-field preservation, attachment markers, coverage reporting, hidden-message labels, ISO timestamps, branch fallback, filename hardening, SPA recovery, image budgets | Local build/check completed | Historical remediation release |
-| `v0.5.1` | Restrict activation to `/c/*` and `/s/*`; lift mobile controls above the composer/send area | Local build/check completed; live testing owned by the user | **Current stable release** |
+| `v0.5.1` | Restrict activation to `/c/*` and `/s/*`; lift mobile controls above the composer/send area | Local build/check completed; live testing owned by the user | Historical |
 
-## Validation record for v0.6.0 candidate
+## Validation record for v0.8.0 candidate
 
-The v0.6.0 candidate was built and checked on 2026-08-22 on the `claude-basic-v0.6` feature branch after adding the Claude text adapter and synchronizing the root and `dist/` artifacts:
+The v0.8.0 candidate was built and checked on 2026-08-22 on the `chatgpt-image-options-v0.8` feature branch after adding per-export ChatGPT image controls:
+
+| Check | Result |
+|---|---|
+| `npm run build` | Passed; generated userscript written to `dist/` |
+| `npm run check` | Passed; ChatGPT and Claude fixture/regression checks passed |
+| `node --check dist/chatgpt-chats-exporter.user.js` | Passed |
+| Root/dist byte comparison | Pending final artifact sync |
+| Live ChatGPT image-choice acceptance | Pending product-owner testing |
+
+The candidate is not the stable release until live image-choice testing and the normal pull-request review/merge process are complete.
+
+## Validation record for v0.7.0 candidate
+
+The v0.7.0 candidate was built and checked on 2026-08-22 on the `chatgpt-images-stats-v0.7` feature branch after expanding ChatGPT image handling and adding safe local export statistics:
+
+| Check | Result |
+|---|---|
+| `npm run build` | Passed; generated userscript written to `dist/` |
+| `npm run check` | Passed; all ChatGPT and Claude fixture/regression checks passed |
+| `node --check dist/chatgpt-chats-exporter.user.js` | Passed |
+| Root/dist byte comparison | Passed |
+| Live ChatGPT image acceptance | Pending product-owner testing |
+
+The candidate is not the stable release until live image testing and the normal pull-request review/merge process are complete.
+
+## Validation record for v0.6.0
+
+The v0.6.0 release was built and checked on 2026-08-22 on the `claude-basic-v0.6` feature branch after adding the Claude text adapter and synchronizing the root and `dist/` artifacts:
 
 | Check | Result |
 |---|---|
@@ -72,7 +102,7 @@ The v0.6.0 candidate was built and checked on 2026-08-22 on the `claude-basic-v0
 | Root/dist byte comparison | Passed |
 | Live Claude browser acceptance | Pending product-owner testing |
 
-The candidate is not the stable release until live Claude testing and the normal pull-request review/merge process are complete.
+The release was merged into `main` through PR #8 after initial product-owner testing.
 
 ## Validation record for v0.5.1
 

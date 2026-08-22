@@ -1,4 +1,4 @@
-const ARCHIVER_VERSION = '0.6.0';
+const ARCHIVER_VERSION = '0.8.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -131,6 +131,34 @@ function displayTextItems(text, role, kind, language = '') {
   return [{ kind, text: formatToolTranscript(rawText), language }];
 }
 
+function imagePointerFromValue(value, depth = 0) {
+  if (depth > 3 || value === null || value === undefined) return null;
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (!isPlainObject(value)) return null;
+  for (const key of ['asset_pointer', 'assetPointer', 'image_url', 'imageUrl', 'download_url', 'downloadUrl', 'url', 'href', 'src', 'file_id', 'fileId', 'asset_pointer_link', 'watermarked_asset_pointer', 'image', 'asset']) {
+    const pointer = imagePointerFromValue(value[key], depth + 1);
+    if (pointer) return pointer;
+  }
+  return null;
+}
+
+function executionImageRecords(value, depth = 0, seen = new Set()) {
+  if (depth > 4 || !isPlainObject(value) || seen.has(value)) return [];
+  seen.add(value);
+  const records = [];
+  for (const messages of [value?.metadata?.aggregate_result?.messages, value?.aggregate_result?.messages]) {
+    if (Array.isArray(messages)) records.push(...messages.filter((item) => isPlainObject(item)));
+  }
+  for (const key of ['metadata', 'aggregate_result', 'parts', 'content', 'messages']) {
+    const nested = value[key];
+    if (nested && typeof nested === 'object') {
+      if (Array.isArray(nested)) for (const item of nested) records.push(...executionImageRecords(item, depth + 1, seen));
+      else records.push(...executionImageRecords(nested, depth + 1, seen));
+    }
+  }
+  return records;
+}
+
 function contentCandidates(message) {
   const content = message?.content;
   const candidates = [];
@@ -164,6 +192,25 @@ function contentCandidates(message) {
   const attachmentLists = [message?.metadata?.attachments, content?.metadata?.attachments].filter(Array.isArray);
   const attachments = [...new Set(attachmentLists.flat())];
   for (const attachment of attachments) add({ kind: 'attachment', value: attachment });
+
+  const executionMessages = executionImageRecords(message);
+  for (const executionMessage of executionMessages) {
+    const executionType = String(executionMessage?.message_type ?? executionMessage?.type ?? executionMessage?.content_type ?? '').toLowerCase();
+    if (!executionType.includes('image')) continue;
+    const pointer = imagePointerFromValue(executionMessage);
+    if (!pointer) continue;
+    add({
+      kind: 'part',
+      value: {
+        content_type: 'image_asset_pointer',
+        asset_pointer: pointer,
+        mime_type: executionMessage?.mime_type ?? executionMessage?.mimeType ?? '',
+        width: executionMessage?.width,
+        height: executionMessage?.height,
+      },
+      source: 'execution-output',
+    });
+  }
   return candidates;
 }
 
@@ -175,17 +222,19 @@ function normalizePart(candidate, depth = 0) {
   if (!isPlainObject(value)) return { kind: 'omitted', reason: 'non-text content part' };
 
   const type = String(value.content_type ?? value.type ?? value.kind ?? '').toLowerCase();
-  if (typeof value.asset_pointer === 'string' && type.includes('image')) {
+  const pointer = imagePointerFromValue(value);
+  const imageShape = type.includes('image') || Object.prototype.hasOwnProperty.call(value, 'asset_pointer') || Object.prototype.hasOwnProperty.call(value, 'image_url');
+  if (pointer && imageShape) {
     const metadata = isPlainObject(value.metadata) ? value.metadata : {};
     return {
       kind: 'image',
       asset: {
-        pointer: value.asset_pointer,
-        mimeType: value.mime_type ?? '',
+        pointer,
+        mimeType: value.mime_type ?? value.mimeType ?? '',
         sizeBytes: Number.isFinite(value.size_bytes) ? value.size_bytes : null,
         width: Number.isFinite(value.width) ? value.width : null,
         height: Number.isFinite(value.height) ? value.height : null,
-        generated: Boolean(metadata.dalle || metadata.generation),
+        generated: Boolean(metadata.dalle || metadata.generation || value.generated),
       },
     };
   }
@@ -297,6 +346,7 @@ function normalizeNode(node, index) {
     authorLabel: hidden ? `${labelForRole(role)} (hidden by ChatGPT)` : labelForRole(role),
     createdAt: message.create_time ?? message.createdAt ?? message.created_at ?? null,
     parentId: node.parent ?? message.parent ?? null,
+    modelSlug: asNonEmptyString(message.model_slug) ?? asNonEmptyString(message.modelSlug) ?? asNonEmptyString(message.metadata?.model_slug) ?? asNonEmptyString(message.metadata?.model) ?? null,
     textBlocks: extracted.blocks,
     omittedCount: extracted.omittedCount,
     hidden,
@@ -308,6 +358,7 @@ export function normalizeConversation(raw) {
 
   const title = asNonEmptyString(raw.title) ?? asNonEmptyString(raw.name) ?? 'ChatGPT conversation';
   const conversationId = asNonEmptyString(raw.conversation_id) ?? asNonEmptyString(raw.conversationId) ?? null;
+  const model = asNonEmptyString(raw.model_slug) ?? asNonEmptyString(raw.modelSlug) ?? asNonEmptyString(raw.default_model_slug) ?? null;
   let nodes;
   let sourceShape;
   let activeBranch = true;
@@ -343,6 +394,7 @@ export function normalizeConversation(raw) {
   return {
     title,
     conversationId,
+    model,
     provider: 'ChatGPT',
     sourceShape,
     activeBranch,
@@ -410,6 +462,7 @@ function renderBlock(block) {
   if (block.type === 'omitted') return `<p class="omitted">[non-text content omitted: ${escapeHtml(block.reason)}]</p>`;
   if (block.type === 'image') {
     const asset = block.asset ?? {};
+    if (asset.status === 'excluded') return '<p class="omitted">[image excluded by export settings]</p>';
     if (asset.status === 'embedded' && typeof asset.dataUrl === 'string' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(asset.dataUrl)) {
       const dimensions = Number.isFinite(asset.width) && Number.isFinite(asset.height) ? ` width="${escapeAttribute(String(Math.min(asset.width, 10000)))}" height="${escapeAttribute(String(Math.min(asset.height, 10000)))}"` : '';
       const label = asset.generated ? 'Generated image' : 'Uploaded/reference image';
@@ -455,6 +508,31 @@ function roleCounts(messages, provider = 'ChatGPT') {
   const counts = new Map();
   for (const message of messages) counts.set(message.role, (counts.get(message.role) ?? 0) + 1);
   return [...counts.entries()].map(([role, count]) => `${count} ${role === 'assistant' ? provider : (ROLE_LABELS[role] ?? role)}`).join(', ');
+}
+
+function formatLocalStats(stats) {
+  if (!Number.isFinite(stats?.wordCount) || !Number.isFinite(stats?.characterCount)) return '';
+  const words = Number(stats.wordCount).toLocaleString('en-US');
+  const characters = Number(stats.characterCount).toLocaleString('en-US');
+  const blocks = Number.isFinite(stats.textBlockCount) ? ` · ${Number(stats.textBlockCount).toLocaleString('en-US')} text blocks` : '';
+  return `<p class="meta">Safe local stats: ${words} words · ${characters} characters${blocks}. Counted from exported text only; provider token and context-window usage are not included.</p>`;
+}
+
+function safeModelLabel(value) {
+  const model = String(value ?? '').trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(model) ? model : null;
+}
+
+function formatModels(conversation) {
+  const models = Array.isArray(conversation?.stats?.modelsUsed) ? conversation.stats.modelsUsed.map(safeModelLabel).filter(Boolean) : [];
+  if (models.length === 0) {
+    const model = safeModelLabel(conversation?.model);
+    if (model) models.push(model);
+  }
+  if (models.length === 0) return '';
+  const uniqueModels = [...new Set(models)];
+  const label = uniqueModels.length === 1 ? 'Model' : 'Models used';
+  return `<p class="meta">${label}: ${escapeHtml(uniqueModels.join(', '))}</p>`;
 }
 
 function railLabel(text) {
@@ -581,18 +659,19 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
   const idMeta = includeConversationId && conversation.conversationId ? `<meta name="conversation-id" content="${escapeAttribute(conversation.conversationId)}">` : '';
   const sourceBlock = sourceUrl ? `<p class="meta">Source: <a href="${escapeAttribute(sourceUrl)}" rel="noopener noreferrer">${escapeHtml(sourceUrl)}</a></p>` : '';
   const metadata = `<p class="meta">Exported ${escapeHtml(exportedAt)} · ${conversation.stats.messageCount} message${conversation.stats.messageCount === 1 ? '' : 's'} (${escapeHtml(roleCounts(conversation.messages, provider))})</p>`;
-  const modelLine = typeof conversation.model === 'string' && conversation.model.trim() ? `<p class="meta">Model: ${escapeHtml(conversation.model)}</p>` : '';
+  const modelLine = formatModels(conversation);
+  const statsLine = formatLocalStats(conversation.stats);
   const omissionLine = conversation.stats.omittedBlockCount > 0
     ? `<p class="meta flag-warn">${conversation.stats.omittedBlockCount} omitted non-text block${conversation.stats.omittedBlockCount === 1 ? '' : 's'}</p>`
     : '<p class="meta flag-ok">Text blocks complete</p>';
   const imageLine = Number.isFinite(conversation.stats.imageCount) && conversation.stats.imageCount > 0
-    ? `<p class="meta">Images: ${conversation.stats.imageEmbeddedCount ?? 0} embedded, ${conversation.stats.imageUnavailableCount ?? 0} unavailable${conversation.stats.imageBudgetLimitedCount ? `; ${conversation.stats.imageBudgetLimitedCount} limited by export budget` : ''}${Number(conversation.stats.imageBytes) > 0 ? ` · ${Math.ceil(Number(conversation.stats.imageBytes) / 1024)} KB embedded` : ''}</p>`
+    ? `<p class="meta">Images: ${conversation.stats.imageEmbeddedCount ?? 0} embedded, ${conversation.stats.imageExcludedCount ?? 0} excluded, ${conversation.stats.imageUnavailableCount ?? 0} unavailable${conversation.stats.imageBudgetLimitedCount ? `; ${conversation.stats.imageBudgetLimitedCount} limited by export budget` : ''}${Number(conversation.stats.imageBytes) > 0 ? ` · ${Math.ceil(Number(conversation.stats.imageBytes) / 1024)} KB embedded` : ''}</p>`
     : '';
   const coverageLine = (conversation.stats.droppedNodeCount ?? 0) > 0 || (conversation.stats.duplicateMessageCount ?? 0) > 0
     ? `<p class="meta flag-warn">Coverage: ${conversation.stats.droppedNodeCount ?? 0} dropped node${conversation.stats.droppedNodeCount === 1 ? '' : 's'}, ${conversation.stats.duplicateMessageCount ?? 0} duplicate message${conversation.stats.duplicateMessageCount === 1 ? '' : 's'} removed</p>`
     : '';
   const hiddenLine = (conversation.stats.hiddenMessageCount ?? 0) > 0
-    ? `<p class="meta flag-warn">${conversation.stats.hiddenMessageCount} message${conversation.stats.hiddenMessageCount === 1 ? '' : 's'} marked hidden by ChatGPT; included unchanged</p>`
+    ? `<p class="meta flag-warn">${conversation.stats.hiddenMessageCount} message${conversation.stats.hiddenMessageCount === 1 ? '' : 's'} marked hidden by ${escapeHtml(provider)}; included unchanged</p>`
     : '';
   return `<!doctype html>
 <html lang="en">
@@ -614,6 +693,7 @@ ${idMeta}
   <h1>${title}</h1>
   ${metadata}
   ${modelLine}
+  ${statsLine}
   ${sourceBlock}
   ${omissionLine}
   ${imageLine}

@@ -35,8 +35,8 @@ assert.match(simpleHtml, /class="copy-btn"/);
 assert.match(simpleHtml, /querySelector\("\.content"\)/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.4\.0"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.4\.0/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.4\.1"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.4\.1/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -95,7 +95,7 @@ const embeddedImageHtml = renderConversationHtml({ ...imageConversation, stats: 
 assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 unavailable/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.4\.0/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.4\.1/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -103,6 +103,9 @@ assert.match(assetsSource, /MAX_IMAGE_BYTES = 3 \* 1024 \* 1024/);
 assert.match(assetsSource, /\/backend-api\/files\/download/);
 assert.match(assetsSource, /\/backend-api\/estuary\/content/);
 assert.match(assetsSource, /conversation_id=/);
+assert.match(assetsSource, /download_intent=download/);
+assert.match(assetsSource, /include_library_file_state=true/);
+assert.match(assetsSource, /post_id=/);
 assert.match(assetsSource, /data:\$\{mime\};base64/);
 
 const blocks = textToBlocks('before\n\n```python\nprint("ok")\n```\n\nafter');
@@ -179,7 +182,7 @@ assert.match(uiSource, /function migratePrefsOnce/);
 assert.match(uiSource, /localStorage\.removeItem\(LEGACY_PREF_KEY\)/);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.4\.0/);
+assert.match(buildSource, /@version      0\.4\.1/);
 assert.match(buildSource, /source\('chatgpt-assets\.mjs'\)/);
 assert.match(buildSource, /\$\{assets\}/);
 

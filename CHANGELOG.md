@@ -2,6 +2,14 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.4.1] — 2026-08-22
+
+### Fixed
+
+The image resolver now tries the current query-bearing `/backend-api/files/<file>/<conversation>` metadata request, including `download_intent=download`, `include_library_file_state=true`, and `inline=false`, before older fallback forms. The previous 0.4.0 build could report `asset metadata did not contain a same-origin estuary download URL` for valid image assets when the legacy metadata path returned an incomplete response.
+
+The existing same-origin restriction, image-only MIME allowlist, 3 MiB limit, explicit unavailable markers, deduplication, and offline `data:` embedding behavior are unchanged.
+
 ## [0.4.0] — 2026-08-22
 
 ### Added

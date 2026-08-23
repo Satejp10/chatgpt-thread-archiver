@@ -47,6 +47,7 @@ The current bundling order is important. `build.mjs` concatenates `src/core.mjs`
 
 | Release | Main purpose | Validation status | Release state |
 |---|---|---|---|
+| `v0.8.1` | Optional per-message model labels with explicit unknown/not-found wording | Local build/check pending final validation; live model-label testing remains | Candidate on feature branch |
 | `v0.8.0` | Per-export ChatGPT image choices: include all, exclude all, or choose individual images | Local build/check pending final validation; live image-choice testing remains | Candidate on feature branch |
 | `v0.7.0` | Expanded ChatGPT image recovery and safe local export statistics | Local build/check completed; live image testing remains | Candidate on feature branch |
 | `v0.6.0` | Basic Claude.ai text export, shared model display, provider-scoped activation | Local build/check completed; live Claude testing completed by product owner | **Current stable release** |
@@ -61,6 +62,20 @@ The current bundling order is important. `build.mjs` concatenates `src/core.mjs`
 | `v0.4.2` | Bounded nested signed-URL discovery for image metadata | Local build/check completed | Historical |
 | `v0.5.0` | Audit remediation: structured-field preservation, attachment markers, coverage reporting, hidden-message labels, ISO timestamps, branch fallback, filename hardening, SPA recovery, image budgets | Local build/check completed | Historical remediation release |
 | `v0.5.1` | Restrict activation to `/c/*` and `/s/*`; lift mobile controls above the composer/send area | Local build/check completed; live testing owned by the user | Historical |
+
+## Validation record for v0.8.1 candidate
+
+The v0.8.1 candidate was built and checked on 2026-08-22 on the `chatgpt-image-options-v0.8` feature branch after adding optional per-message model labels:
+
+| Check | Result |
+|---|---|
+| `npm run build` | Passed; generated userscript written to `dist/` |
+| `npm run check` | Passed; known-model, unknown-model, disabled-label, and existing fixture checks passed |
+| `node --check dist/chatgpt-chats-exporter.user.js` | Passed |
+| Root/dist byte comparison | Passed |
+| Live ChatGPT/Claude model-label acceptance | Pending product-owner testing |
+
+The candidate is not the stable release until live model-label testing and the normal pull-request review/merge process are complete.
 
 ## Validation record for v0.8.0 candidate
 

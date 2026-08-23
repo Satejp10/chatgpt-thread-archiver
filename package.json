@@ -1,6 +1,6 @@
 {
   "name": "chatgpt-chats-exporter-text-to-html-mvp",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "type": "module",
   "description": "A local browser exporter for the currently open ChatGPT or Claude.ai conversation with safe local statistics.",

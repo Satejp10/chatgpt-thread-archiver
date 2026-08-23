@@ -78,7 +78,7 @@
   }
 
   function defaultPrefs() {
-    return { url: true, title: true, conversationId: false, imageMode: 'all' };
+    return { url: true, title: true, conversationId: false, imageMode: 'all', messageModels: true };
   }
 
   function parsePrefs(raw) {
@@ -88,7 +88,8 @@
       const keys = ['url', 'title', 'conversationId'];
       if (!value || typeof value !== 'object' || keys.some((key) => typeof value[key] !== 'boolean')) return null;
       const imageMode = ['all', 'none', 'choose'].includes(value.imageMode) ? value.imageMode : 'all';
-      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode };
+      const messageModels = typeof value.messageModels === 'boolean' ? value.messageModels : true;
+      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode, messageModels };
     } catch {
       return null;
     }
@@ -131,6 +132,7 @@
         title: Boolean(prefs.title),
         conversationId: Boolean(prefs.conversationId),
         imageMode: ['all', 'none', 'choose'].includes(prefs.imageMode) ? prefs.imageMode : 'all',
+        messageModels: prefs.messageModels !== false,
       }));
     } catch {
       // Preference persistence is optional and must never block an export.
@@ -260,6 +262,7 @@
     const url = checkbox('cge-pref-url', 'Include the conversation URL', prefs.url);
     const title = checkbox('cge-pref-title', 'Include the conversation title and use it in the filename', prefs.title);
     const conversationId = checkbox('cge-pref-conversation-id', 'Include the conversation ID in the HTML metadata', prefs.conversationId);
+    const messageModels = checkbox('cge-pref-message-models', 'Show a model label on each assistant message', prefs.messageModels);
     const imageChoices = [];
     let imageFieldset = null;
     if (provider === 'ChatGPT') {
@@ -284,7 +287,7 @@
     exportButton.className = 'cge-primary';
     exportButton.textContent = 'Export HTML';
     actions.append(cancel, exportButton);
-    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper);
+    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper, messageModels.wrapper);
     if (imageFieldset) card.appendChild(imageFieldset);
     card.appendChild(actions);
     overlay.appendChild(card);
@@ -298,6 +301,7 @@
         url: url.input.checked,
         title: title.input.checked,
         conversationId: conversationId.input.checked,
+        messageModels: messageModels.input.checked,
         imageMode: provider === 'ChatGPT' ? (imageChoices.find((input) => input.checked)?.value ?? prefs.imageMode) : prefs.imageMode,
       };
       savePrefs(chosen);
@@ -360,6 +364,7 @@
         sourceUrl: prefs.url ? globalThis.location?.href : null,
         includeConversationId: prefs.conversationId,
         includeTitle: prefs.title,
+        includeMessageModels: prefs.messageModels !== false,
       });
       downloadHtml(html, filenameFor(exportableConversation, prefs, exportedAt));
       const imageSummary = Number.isFinite(exportStats.imageCount) && exportStats.imageCount > 0

@@ -41,6 +41,12 @@ The generated HTML includes a right-edge prompt rail with one entry per user pro
 
 ## Run it in a browser
 
+### Quick install for first-time users
+
+1. Install [Tampermonkey](https://www.tampermonkey.net/) for your browser and accept the browser's extension prompt.
+2. Open [`dist/chatgpt-chats-exporter.user.js`](https://github.com/Satejp10/chatgpt-thread-archiver/blob/main/dist/chatgpt-chats-exporter.user.js) on GitHub, click **Raw**, and then click **Install** in Tampermonkey.
+3. Open or refresh a ChatGPT or Claude.ai conversation while signed in. The floating **Export HTML** button should appear.
+
 Install the canonical bundled artifact `dist/chatgpt-chats-exporter.user.js` in Tampermonkey or Violentmonkey. The root `chatgpt-chats-exporter.user.js` is kept byte-identical to that generated artifact for repository browsing and direct download convenience. The userscript activates only on ChatGPT `/c/...` and `/s/...` routes or Claude.ai `/chat/...` routes, which avoids injecting controls into unrelated pages. Because the 0.3.0 name and namespace changed to `ChatGPT Thread Archiver` and `local.chatgpt-thread-archiver`, delete the old userscript entry manually before reinstalling this build. ChatGPT image resolution, image inclusion choices, optional per-message model labels, safe local statistics, and basic Claude text export are included in the generated bundle. Save the script, open or refresh a supported chat while signed in, and use the floating **Export HTML** button.
 
 The generated file can be opened offline. To verify the offline boundary, open the file with network access disabled or with the browser’s network panel visible and confirm that it remains readable without external assets. On narrow mobile screens, the export button and status panel are lifted above the composer/send area and account for the device safe-area inset. The CSP and static script remain unchanged by the visual port.

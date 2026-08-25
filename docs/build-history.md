@@ -7,8 +7,8 @@ This document is the maintainer-facing build record for **ChatGPT Thread Archive
 | Item | Value |
 |---|---|
 | Stable branch | `main` |
-| Current release | `v0.6.0` |
-| Latest stable merge commit | `549ec4c4bfb44fc5138a0e377ee2b041b246580e` |
+| Current release | `v0.8.1` |
+| Latest stable merge commit | `42d8327` |
 | Canonical installable artifact | `dist/chatgpt-chats-exporter.user.js` |
 | Root convenience artifact | `chatgpt-chats-exporter.user.js` |
 | Artifact rule | Root and `dist/` userscripts must be byte-identical |
@@ -47,10 +47,11 @@ The current bundling order is important. `build.mjs` concatenates `src/core.mjs`
 
 | Release | Main purpose | Validation status | Release state |
 |---|---|---|---|
-| `v0.8.1` | Optional per-message model labels with explicit unknown/not-found wording | Local build/check pending final validation; live model-label testing remains | Candidate on feature branch |
-| `v0.8.0` | Per-export ChatGPT image choices: include all, exclude all, or choose individual images | Local build/check pending final validation; live image-choice testing remains | Candidate on feature branch |
-| `v0.7.0` | Expanded ChatGPT image recovery and safe local export statistics | Local build/check completed; live image testing remains | Candidate on feature branch |
-| `v0.6.0` | Basic Claude.ai text export, shared model display, provider-scoped activation | Local build/check completed; live Claude testing completed by product owner | **Current stable release** |
+| `v0.9.0` | ChatGPT Projects `/g/*` activation and optional all-branch export for edited prompts/regenerated responses | Local build/check completed; live Projects and branch testing remains | Candidate on feature branch |
+| `v0.8.1` | Optional per-message model labels with explicit unknown/not-found wording, plus dark-theme export toggle | Local build/check completed; live model-label/theme testing remains | **Current stable release** |
+| `v0.8.0` | Per-export ChatGPT image choices: include all, exclude all, or choose individual images | Local build/check completed; live image-choice testing remains | Historical |
+| `v0.7.0` | Expanded ChatGPT image recovery and safe local export statistics | Local build/check completed; live image testing remains | Historical |
+| `v0.6.0` | Basic Claude.ai text export, shared model display, provider-scoped activation | Local build/check completed; live Claude testing completed by product owner | Historical |
 | `v0.1.0` | API-based conversation exporter MVP | Local build/check completed during initial implementation | Historical |
 | `v0.2.0` | Legacy-style UI, prompt rail, copy controls, privacy preferences, security hardening | Local build/check completed | Historical |
 | `v0.3.0` | Thread Archiver rename, preference migration, bounded JSON handling, rail fixes | Local build/check completed | Historical |
@@ -62,6 +63,22 @@ The current bundling order is important. `build.mjs` concatenates `src/core.mjs`
 | `v0.4.2` | Bounded nested signed-URL discovery for image metadata | Local build/check completed | Historical |
 | `v0.5.0` | Audit remediation: structured-field preservation, attachment markers, coverage reporting, hidden-message labels, ISO timestamps, branch fallback, filename hardening, SPA recovery, image budgets | Local build/check completed | Historical remediation release |
 | `v0.5.1` | Restrict activation to `/c/*` and `/s/*`; lift mobile controls above the composer/send area | Local build/check completed; live testing owned by the user | Historical |
+
+## Validation record for v0.9.0 candidate
+
+The v0.9.0 candidate was built and checked on 2026-08-25 on `pending-projects-theme-branches` after adding ChatGPT Projects-route activation, branch retention for ChatGPT and Claude.ai, optional all-branch rendering, offline branch navigation, and branch-aware image-selection offsets.
+
+| Check | Result |
+|---|---|
+| `npm run build` | Passed; generated userscript written to `dist/` |
+| `npm run check` | Passed; route, nested-branch, Claude, renderer, statistics, and image-offset checks passed |
+| `node --check dist/chatgpt-chats-exporter.user.js` | Passed |
+| Root/dist byte comparison | Passed |
+| `git diff --check` | Passed |
+| Live ChatGPT Projects route acceptance | Pending product-owner testing; route semantics must be confirmed |
+| Live edited/regenerated branch acceptance | Pending product-owner testing on ChatGPT and Claude.ai |
+
+The candidate is not the stable release until local validation, live route/branch testing, and the normal pull-request review/merge process are complete.
 
 ## Validation record for v0.8.1 candidate
 

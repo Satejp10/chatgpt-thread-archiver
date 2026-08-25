@@ -1,4 +1,4 @@
-const ARCHIVER_VERSION = '0.8.1';
+const ARCHIVER_VERSION = '0.9.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -327,6 +327,50 @@ function pathFromMapping(entries, leafId) {
   return path.reverse();
 }
 
+function branchPathsFromMapping(entries, activeLeafId) {
+  const withMessages = entries.filter((entry) => entry.message);
+  const leaves = withMessages.filter((entry) => !Array.isArray(entry.children) || entry.children.length === 0);
+  const leafIds = leaves.map((entry) => entry.id);
+  const orderedLeafIds = [activeLeafId, ...leafIds.filter((id) => id !== activeLeafId)].filter(Boolean);
+  const paths = [];
+  const seenPaths = new Set();
+  for (const leafId of orderedLeafIds) {
+    try {
+      const nodes = pathFromMapping(entries, leafId);
+      const key = nodes.map((node) => node.id).join('\\u0000');
+      if (seenPaths.has(key)) continue;
+      seenPaths.add(key);
+      paths.push(nodes);
+    } catch {
+      // A malformed alternate branch must not prevent the valid active branch from exporting.
+    }
+  }
+  return paths;
+}
+
+function uniqueNormalizedMessages(messages) {
+  const unique = [];
+  const seen = new Set();
+  for (const message of messages) {
+    if (seen.has(message.id)) continue;
+    seen.add(message.id);
+    unique.push(message);
+  }
+  return unique;
+}
+
+function statsForBranch(nodes, messages) {
+  const structuralNodeCount = nodes.filter((node) => !(Object.prototype.hasOwnProperty.call(node, 'message') && !node.message)).length;
+  return {
+    messageCount: messages.length,
+    omittedBlockCount: messages.reduce((sum, message) => sum + message.omittedCount, 0),
+    sourceNodeCount: nodes.length,
+    droppedNodeCount: Math.max(0, structuralNodeCount - messages.length),
+    duplicateMessageCount: Math.max(0, nodes.filter((node) => node.message).length - messages.length),
+    hiddenMessageCount: messages.filter((message) => message.hidden).length,
+  };
+}
+
 function arrayMessages(raw) {
   if (Array.isArray(raw?.messages)) return raw.messages.map((message, index) => ({ id: message?.id ?? `message-${index + 1}`, message }));
   if (Array.isArray(raw?.data?.messages)) return raw.data.messages.map((message, index) => ({ id: message?.id ?? `message-${index + 1}`, message }));
@@ -362,12 +406,14 @@ export function normalizeConversation(raw) {
   let nodes;
   let sourceShape;
   let activeBranch = true;
+  let branchNodes = [];
 
   const entries = mappingEntries(raw);
   if (entries.length > 0) {
     const leafId = chooseLeaf(entries, raw.current_node ?? raw.currentNode);
     if (!leafId) throw new ConversationShapeError('Conversation mapping contains no usable message node.', { keys: Object.keys(raw) });
     nodes = pathFromMapping(entries, leafId);
+    branchNodes = branchPathsFromMapping(entries, leafId);
     sourceShape = 'mapping-tree';
   } else {
     nodes = arrayMessages(raw);
@@ -378,19 +424,19 @@ export function normalizeConversation(raw) {
   const messages = nodes.map(normalizeNode).filter(Boolean);
   if (messages.length === 0) throw new ConversationShapeError('No message nodes with recognizable content were found.', { sourceShape, keys: Object.keys(raw) });
 
-  const uniqueMessages = [];
-  const seen = new Set();
-  for (const message of messages) {
-    if (seen.has(message.id)) continue;
-    seen.add(message.id);
-    uniqueMessages.push(message);
-  }
-
-  const omittedBlockCount = uniqueMessages.reduce((sum, message) => sum + message.omittedCount, 0);
-  const structuralNodeCount = nodes.filter((node) => !(Object.prototype.hasOwnProperty.call(node, 'message') && !node.message)).length;
-  const droppedNodeCount = Math.max(0, structuralNodeCount - messages.length);
-  const duplicateMessageCount = Math.max(0, messages.length - uniqueMessages.length);
-  const hiddenMessageCount = uniqueMessages.filter((message) => message.hidden).length;
+  const uniqueMessages = uniqueNormalizedMessages(messages);
+  const branches = branchNodes.map((pathNodes, index) => {
+    const branchMessages = uniqueNormalizedMessages(pathNodes.map(normalizeNode).filter(Boolean));
+    return {
+      index,
+      leafId: pathNodes.at(-1)?.id ?? null,
+      active: index === 0,
+      messages: branchMessages,
+      stats: statsForBranch(pathNodes, branchMessages),
+    };
+  });
+  const branchCount = branches.length;
+  const baseStats = statsForBranch(nodes, uniqueMessages);
   return {
     title,
     conversationId,
@@ -398,15 +444,24 @@ export function normalizeConversation(raw) {
     provider: 'ChatGPT',
     sourceShape,
     activeBranch,
+    activeBranchIndex: 0,
+    branches: branchCount > 1 ? branches : [],
     messages: uniqueMessages,
-    stats: {
-      messageCount: uniqueMessages.length,
-      omittedBlockCount,
-      sourceNodeCount: nodes.length,
-      droppedNodeCount,
-      duplicateMessageCount,
-      hiddenMessageCount,
-    },
+    stats: { ...baseStats, branchCount },
+  };
+}
+
+export function selectConversationBranch(conversation, index = 0) {
+  const branches = Array.isArray(conversation?.branches) ? conversation.branches : [];
+  if (branches.length === 0) return { ...conversation, activeBranchIndex: 0, messages: conversation?.messages ?? [] };
+  const requested = Number.isInteger(index) ? index : 0;
+  const branchIndex = Math.min(Math.max(requested, 0), branches.length - 1);
+  const branch = branches[branchIndex];
+  return {
+    ...conversation,
+    activeBranchIndex: branchIndex,
+    messages: branch.messages,
+    stats: { ...conversation.stats, ...branch.stats, branchCount: branches.length },
   };
 }
 
@@ -584,7 +639,12 @@ header.export-head { margin-bottom: 24px; }
 .copy-btn:hover { background: #0d8a6a; }
 	#theme-toggle { position: fixed; top: 12px; left: 10px; padding: 3px 8px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); border-radius: 4px; cursor: pointer; z-index: 51; }
 	#theme-toggle:hover { color: var(--text); }
-	#rail { max-width: 820px; margin: 0 auto 24px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+	.branch-view[hidden] { display: none; }
+.branch-nav { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 10px 0 0; }
+.branch-nav button { min-width: 34px; padding: 4px 9px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px; cursor: pointer; font-size: 18px; line-height: 1; }
+.branch-nav button:disabled { opacity: .4; cursor: default; }
+.branch-nav span { color: var(--muted); font-size: .85em; }
+#rail { max-width: 820px; margin: 0 auto 24px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
 #rail h2 { margin: 0 0 8px; color: var(--muted); font-size: .9rem; }
 #rail ol { margin: 0; padding-left: 1.4em; font-size: .9rem; }
 #rail li { margin: 2px 0; }
@@ -629,6 +689,9 @@ const EXPORT_JS = [
   '    var button = event.target.closest ? event.target.closest(".copy-btn") : null;',
   '    if (button) { var body = button.parentNode.querySelector(".content"); if (body) copy(body.innerText, button); return; }',
   '  });',
+  '  var branchNav = document.getElementById("branch-nav"), branchViews = document.querySelectorAll(".branch-view"), branchPosition = document.getElementById("branch-position"), branchPrev = document.getElementById("branch-prev"), branchNext = document.getElementById("branch-next"), branchCurrent = 0;',
+  '  function showBranch(index) { if (!branchViews.length) return; branchCurrent = Math.max(0, Math.min(index, branchViews.length - 1)); for (var b = 0; b < branchViews.length; b++) branchViews[b].hidden = b !== branchCurrent; if (branchPosition) branchPosition.textContent = "Branch " + (branchCurrent + 1) + "/" + branchViews.length; if (branchPrev) branchPrev.disabled = branchCurrent === 0; if (branchNext) branchNext.disabled = branchCurrent === branchViews.length - 1; }',
+  '  if (branchNav && branchViews.length > 1) { branchPrev.addEventListener("click", function () { showBranch(branchCurrent - 1); }); branchNext.addEventListener("click", function () { showBranch(branchCurrent + 1); }); showBranch(0); }',
   '  var rail = document.getElementById("rail"), toggle = document.getElementById("rail-toggle");',
   '  if (!rail) return;',
   '  function setHidden(hidden) { rail.className = hidden ? "hidden" : ""; if (toggle) { toggle.textContent = hidden ? "Nav" : "Hide"; toggle.setAttribute("aria-expanded", hidden ? "false" : "true"); } try { sessionStorage.setItem("chatgpt-thread-archiver-rail-hidden", hidden ? "1" : "0"); } catch (e) {} }',
@@ -652,29 +715,50 @@ const EXPORT_JS = [
   '})();',
 ].join('\n');
 
-export function renderConversationHtml(conversation, { exportedAt = new Date().toISOString(), sourceUrl = null, includeConversationId = false, includeTitle = true, includeMessageModels = true } = {}) {
-  const provider = typeof conversation.provider === 'string' && conversation.provider.trim() ? conversation.provider.trim() : 'ChatGPT';
-  const railItems = [];
-  const messagesHtml = conversation.messages.map((message, index) => {
-    const id = `m-${String(index + 1).padStart(4, '0')}`;
+function renderMessageList(messages, branchIndex, branchCount, includeMessageModels, railItems) {
+  return messages.map((message, index) => {
+    const id = branchCount > 1
+      ? `m-b${String(branchIndex + 1).padStart(2, '0')}-${String(index + 1).padStart(4, '0')}`
+      : `m-${String(index + 1).padStart(4, '0')}`;
     const timestamp = formatTimestamp(message.createdAt);
     const timestampValue = timestampIso(message.createdAt);
     const blocks = message.textBlocks.map(renderBlock).join('') || '<p class="empty-message">[empty message]</p>';
     const copyButton = '<button class="copy-btn" type="button">Copy</button>';
     if (message.role === 'user') {
-      railItems.push(`<li><a href="#${id}"><span>${escapeHtml(railLabel(messagePlainText(message)))}</span></a></li>`);
+      const branchPrefix = branchCount > 1 ? `Branch ${branchIndex + 1} · ` : '';
+      railItems.push(`<li><a href="#${id}"><span>${escapeHtml(branchPrefix + railLabel(messagePlainText(message)))}</span></a></li>`);
     }
     const hiddenClass = message.hidden ? ' message-hidden' : '';
     const datetime = timestampValue ? ` datetime="${escapeAttribute(timestampValue)}"` : '';
-    return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}${hiddenClass}" id="${id}" data-message-index="${index + 1}" data-message-id="${escapeAttribute(message.id)}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${messageModelLine(message, includeMessageModels)}${timestamp ? `<span class="msg-time"><time${datetime}>${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
+    return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}${hiddenClass}" id="${id}" data-message-index="${index + 1}" data-message-id="${escapeAttribute(message.id)}" data-branch-index="${branchIndex}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${messageModelLine(message, includeMessageModels)}${timestamp ? `<span class="msg-time"><time${datetime}>${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
   }).join('\n');
+}
 
-  const branchNote = conversation.activeBranch ? `Active ${provider} conversation branch exported.` : `${provider} message array exported.`;
+export function renderConversationHtml(conversation, { exportedAt = new Date().toISOString(), sourceUrl = null, includeConversationId = false, includeTitle = true, includeMessageModels = true, includeAllBranches = false } = {}) {
+  const provider = typeof conversation.provider === 'string' && conversation.provider.trim() ? conversation.provider.trim() : 'ChatGPT';
+  const availableBranches = Array.isArray(conversation.branches) && conversation.branches.length > 1 ? conversation.branches : [];
+  const branchRecords = includeAllBranches && availableBranches.length > 1
+    ? availableBranches
+    : [{ index: 0, messages: conversation.messages, active: true, stats: conversation.stats }];
+  const branchCount = branchRecords.length;
+  const availableBranchCount = availableBranches.length || (conversation.stats?.branchCount ?? 0);
+  const railItems = [];
+  const renderedMessages = branchRecords.flatMap((branch) => branch.messages ?? []);
+  const messagesHtml = branchRecords.map((branch, index) => `<div class="branch-view" data-branch-index="${index}">${renderMessageList(branch.messages, index, branchCount, includeMessageModels, railItems)}</div>`).join('\n');
+  const branchNavigator = branchCount > 1
+    ? `<div id="branch-nav" class="branch-nav" role="group" aria-label="Conversation branches"><button id="branch-prev" type="button" aria-label="Previous branch">‹</button><span id="branch-position">Branch 1/${branchCount}</span><button id="branch-next" type="button" aria-label="Next branch">›</button></div>`
+    : '';
+  const branchNote = branchCount > 1
+    ? `All ${provider} conversation branches exported.`
+    : conversation.activeBranch
+      ? (availableBranchCount > 1 ? `Active ${provider} conversation branch exported; ${availableBranchCount - 1} alternate branch${availableBranchCount === 2 ? '' : 'es'} available.` : `Active ${provider} conversation branch exported.`)
+      : `${provider} message array exported.`;
   const rawTitle = includeTitle ? conversation.title : `${provider} conversation`;
   const title = escapeHtml(rawTitle);
   const idMeta = includeConversationId && conversation.conversationId ? `<meta name="conversation-id" content="${escapeAttribute(conversation.conversationId)}">` : '';
   const sourceBlock = sourceUrl ? `<p class="meta">Source: <a href="${escapeAttribute(sourceUrl)}" rel="noopener noreferrer">${escapeHtml(sourceUrl)}</a></p>` : '';
-  const metadata = `<p class="meta">Exported ${escapeHtml(exportedAt)} · ${conversation.stats.messageCount} message${conversation.stats.messageCount === 1 ? '' : 's'} (${escapeHtml(roleCounts(conversation.messages, provider))})</p>`;
+  const metadata = `<p class="meta">Exported ${escapeHtml(exportedAt)} · ${renderedMessages.length} message${renderedMessages.length === 1 ? '' : 's'} (${escapeHtml(roleCounts(renderedMessages, provider))})</p>`;
+  const branchLine = availableBranchCount > 1 ? `<p class="meta">Branches: ${branchCount > 1 ? `${branchCount} exported` : `1 of ${availableBranchCount} exported`}</p>` : '';
   const modelLine = formatModels(conversation);
   const statsLine = formatLocalStats(conversation.stats);
   const omissionLine = conversation.stats.omittedBlockCount > 0
@@ -709,6 +793,7 @@ ${idMeta}
 <header class="export-head">
   <h1>${title}</h1>
   ${metadata}
+  ${branchLine}
   ${modelLine}
   ${statsLine}
   ${sourceBlock}
@@ -716,7 +801,8 @@ ${idMeta}
   ${imageLine}
   ${coverageLine}
   ${hiddenLine}
-  </header>
+  ${branchNavigator}
+</header>
 <main>
 <section aria-label="Conversation messages">
 ${messagesHtml}

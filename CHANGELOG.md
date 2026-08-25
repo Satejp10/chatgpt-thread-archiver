@@ -2,6 +2,20 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.9.0] — candidate
+
+### Added
+
+Added ChatGPT Projects-route activation for `https://chatgpt.com/g/*` and retained the existing `/c/*` and `/s/*` routes. The runtime route guard and userscript metadata now agree on the expanded scope.
+
+Added optional branch-aware export for ChatGPT and Claude.ai conversation trees. Current-branch export remains the default; users can choose to include edited prompts and regenerated responses when the provider response exposes those alternate paths. The offline HTML provides local branch navigation, branch counts, and a JavaScript-disabled readable fallback.
+
+### Privacy and reliability
+
+Branch alternatives are exported only from the provider response already requested for the open conversation. No additional provider history scan, telemetry, or third-party request is introduced. Malformed alternate paths are skipped without preventing the valid active branch from exporting, and all-branch exports may be larger because shared prompts are repeated for each path.
+
+Live testing remains required for ChatGPT Project conversations and both providers’ edited/regenerated branch shapes because their internal response formats are undocumented and may change.
+
 ## [0.8.1] — 2026-08-22
 
 ### Added

@@ -78,7 +78,7 @@
   }
 
   function defaultPrefs() {
-    return { url: true, title: true, conversationId: false, imageMode: 'all', messageModels: true };
+    return { url: true, title: true, conversationId: false, imageMode: 'all', messageModels: true, branchMode: 'active' };
   }
 
   function parsePrefs(raw) {
@@ -89,7 +89,8 @@
       if (!value || typeof value !== 'object' || keys.some((key) => typeof value[key] !== 'boolean')) return null;
       const imageMode = ['all', 'none', 'choose'].includes(value.imageMode) ? value.imageMode : 'all';
       const messageModels = typeof value.messageModels === 'boolean' ? value.messageModels : true;
-      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode, messageModels };
+      const branchMode = ['active', 'all'].includes(value.branchMode) ? value.branchMode : 'active';
+      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode, messageModels, branchMode };
     } catch {
       return null;
     }
@@ -133,6 +134,7 @@
         conversationId: Boolean(prefs.conversationId),
         imageMode: ['all', 'none', 'choose'].includes(prefs.imageMode) ? prefs.imageMode : 'all',
         messageModels: prefs.messageModels !== false,
+        branchMode: ['active', 'all'].includes(prefs.branchMode) ? prefs.branchMode : 'active',
       }));
     } catch {
       // Preference persistence is optional and must never block an export.
@@ -174,20 +176,26 @@
   }
 
   function imageEntries(conversation) {
+    const branchRecords = Array.isArray(conversation?.branches) && conversation.branches.length > 1
+      ? conversation.branches
+      : [{ index: 0, messages: conversation?.messages ?? [] }];
     let index = 0;
-    let turnIndex = 0;
     const entries = [];
-    for (const message of (conversation?.messages ?? [])) {
-      if (message.role !== 'unknown') turnIndex += 1;
-      for (const block of message.textBlocks ?? []) {
-        if (block.type !== 'image') continue;
-        entries.push({
-          index: index++,
-          messageIndex: turnIndex,
-          speaker: message.authorLabel ?? (message.role === 'user' ? 'You' : 'ChatGPT'),
-          generated: Boolean(block.asset?.generated),
-          sizeBytes: Number.isFinite(block.asset?.sizeBytes) ? block.asset.sizeBytes : null,
-        });
+    for (const branch of branchRecords) {
+      let turnIndex = 0;
+      for (const message of branch.messages ?? []) {
+        if (message.role !== 'unknown') turnIndex += 1;
+        for (const block of message.textBlocks ?? []) {
+          if (block.type !== 'image') continue;
+          entries.push({
+            index: index++,
+            branchIndex: branch.index ?? 0,
+            messageIndex: turnIndex,
+            speaker: message.authorLabel ?? (message.role === 'user' ? 'You' : 'ChatGPT'),
+            generated: Boolean(block.asset?.generated),
+            sizeBytes: Number.isFinite(block.asset?.sizeBytes) ? block.asset.sizeBytes : null,
+          });
+        }
       }
     }
     return entries;
@@ -219,7 +227,8 @@
       fieldset.appendChild(legend);
       const inputs = [];
       for (const entry of entries) {
-        const image = checkbox(`cge-image-${entry.index}`, `Image ${entry.index + 1} · message ${entry.messageIndex} · ${entry.speaker} · ${entry.generated ? 'generated' : 'uploaded/reference'} · ${formatImageSize(entry.sizeBytes)}`, true);
+        const branchLabel = entries.some((candidate) => candidate.branchIndex !== entry.branchIndex) ? ` · branch ${entry.branchIndex + 1}` : '';
+        const image = checkbox(`cge-image-${entry.index}`, `Image ${entry.index + 1}${branchLabel} · message ${entry.messageIndex} · ${entry.speaker} · ${entry.generated ? 'generated' : 'uploaded/reference'} · ${formatImageSize(entry.sizeBytes)}`, true);
         image.input.dataset.imageIndex = String(entry.index);
         inputs.push(image.input);
         fieldset.appendChild(image.wrapper);
@@ -265,6 +274,16 @@
     const messageModels = checkbox('cge-pref-message-models', 'Show a model label on each assistant message', prefs.messageModels);
     const imageChoices = [];
     let imageFieldset = null;
+    const branchChoices = [];
+    const branchFieldset = document.createElement('fieldset');
+    const branchLegend = document.createElement('legend');
+    branchLegend.textContent = 'Conversation branches';
+    branchFieldset.appendChild(branchLegend);
+    for (const choice of [['active', 'Export current branch only'], ['all', 'Include edited and regenerated branches']]) {
+      const branchRadio = radio('cge-branch-mode', `cge-branch-mode-${choice[0]}`, choice[1], choice[0], prefs.branchMode === choice[0]);
+      branchChoices.push(branchRadio.input);
+      branchFieldset.appendChild(branchRadio.wrapper);
+    }
     if (provider === 'ChatGPT') {
       imageFieldset = document.createElement('fieldset');
       const imageLegend = document.createElement('legend');
@@ -287,7 +306,7 @@
     exportButton.className = 'cge-primary';
     exportButton.textContent = 'Export HTML';
     actions.append(cancel, exportButton);
-    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper, messageModels.wrapper);
+    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper, messageModels.wrapper, branchFieldset);
     if (imageFieldset) card.appendChild(imageFieldset);
     card.appendChild(actions);
     overlay.appendChild(card);
@@ -303,6 +322,7 @@
         conversationId: conversationId.input.checked,
         messageModels: messageModels.input.checked,
         imageMode: provider === 'ChatGPT' ? (imageChoices.find((input) => input.checked)?.value ?? prefs.imageMode) : prefs.imageMode,
+        branchMode: branchChoices.find((input) => input.checked)?.value ?? prefs.branchMode,
       };
       savePrefs(chosen);
       close();
@@ -315,6 +335,46 @@
     if (prefs.title) return sanitizeFilename(conversation.title);
     const stamp = exportedAt.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
     return sanitizeFilename(`chatgpt-export-${stamp}`);
+  }
+
+  function aggregateBranchStats(conversation) {
+    const branches = Array.isArray(conversation?.branches) ? conversation.branches : [];
+    if (branches.length <= 1) return conversation?.stats ?? {};
+    const sumKeys = ['omittedBlockCount', 'sourceNodeCount', 'droppedNodeCount', 'duplicateMessageCount', 'hiddenMessageCount'];
+    return {
+      ...(conversation.stats ?? {}),
+      ...Object.fromEntries(sumKeys.map((key) => [key, branches.reduce((sum, branch) => sum + Number(branch.stats?.[key] ?? 0), 0)])),
+      branchCount: branches.length,
+    };
+  }
+
+  async function resolveAllConversationBranches(conversation, options = {}) {
+    const branches = Array.isArray(conversation?.branches) && conversation.branches.length > 1 ? conversation.branches : [];
+    if (branches.length === 0) return resolveConversationImages(conversation, options);
+    const totalImages = imageEntries(conversation).length;
+    let imageOffset = 0;
+    let completed = 0;
+    const resolvedBranches = [];
+    for (const branch of branches) {
+      const branchConversation = { ...conversation, messages: branch.messages, branches: [], stats: branch.stats };
+      const branchImageCount = imageEntries(branchConversation).length;
+      const resolved = await resolveConversationImages(branchConversation, {
+        ...options,
+        imageIndexOffset: imageOffset,
+        onProgress: () => options.onProgress?.(++completed, totalImages),
+      });
+      resolvedBranches.push({ ...branch, messages: resolved.messages, stats: resolved.stats });
+      imageOffset += branchImageCount;
+    }
+    const allMessages = resolvedBranches.flatMap((branch) => branch.messages);
+    const imageStats = ['imageCount', 'imageEmbeddedCount', 'imageExcludedCount', 'imageUnavailableCount', 'imageBytes', 'imageBudgetLimitedCount']
+      .reduce((summary, key) => ({ ...summary, [key]: resolvedBranches.reduce((sum, branch) => sum + Number(branch.stats?.[key] ?? 0), 0) }), {});
+    return {
+      ...conversation,
+      messages: resolvedBranches[0]?.messages ?? conversation.messages,
+      branches: resolvedBranches,
+      stats: { ...conversation.stats, ...imageStats, messageCount: allMessages.length },
+    };
   }
 
   async function exportCurrentConversation(button, prefs = loadPrefs(), provider = providerForLocation()) {
@@ -335,6 +395,7 @@
       const raw = provider === 'Claude' ? await fetchClaudeConversation(conversationId) : await fetchConversation(conversationId);
       showStatus('Formatting messages…');
       const normalized = provider === 'Claude' ? normalizeClaudeConversation(raw, conversationId) : normalizeConversation(raw);
+      const includeAllBranches = prefs.branchMode === 'all' && Array.isArray(normalized.branches) && normalized.branches.length > 1;
       let selectedImageIndices = null;
       let includeImages = true;
       if (provider === 'ChatGPT') {
@@ -350,13 +411,22 @@
       }
       const conversation = provider === 'Claude'
         ? normalized
-        : await resolveConversationImages(normalized, {
-          conversationId,
-          includeImages,
-          selectedImageIndices,
-          onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
-        });
-      const exportStats = deriveExportStats(conversation.messages, conversation.stats, { model: conversation.model });
+        : includeAllBranches
+          ? await resolveAllConversationBranches(normalized, {
+            conversationId,
+            includeImages,
+            selectedImageIndices,
+            onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
+          })
+          : await resolveConversationImages(normalized, {
+            conversationId,
+            includeImages,
+            selectedImageIndices,
+            onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
+          });
+      const statsMessages = includeAllBranches ? conversation.branches.flatMap((branch) => branch.messages) : conversation.messages;
+      const statsBase = includeAllBranches ? aggregateBranchStats(conversation) : conversation.stats;
+      const exportStats = deriveExportStats(statsMessages, statsBase, { model: conversation.model });
       const exportableConversation = { ...conversation, stats: exportStats };
       const exportedAt = new Date().toISOString();
       const html = renderConversationHtml(exportableConversation, {
@@ -365,6 +435,7 @@
         includeConversationId: prefs.conversationId,
         includeTitle: prefs.title,
         includeMessageModels: prefs.messageModels !== false,
+        includeAllBranches,
       });
       downloadHtml(html, filenameFor(exportableConversation, prefs, exportedAt));
       const imageSummary = Number.isFinite(exportStats.imageCount) && exportStats.imageCount > 0

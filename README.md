@@ -12,13 +12,13 @@ It runs locally in your browser, uses your existing signed-in session, and does 
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/) (or any other userscript manager you prefer) for your browser and accept the browser's extension prompt.
 2. Open [`dist/chatgpt-chats-exporter.user.js`](https://github.com/Satejp10/chatgpt-thread-archiver/blob/main/dist/chatgpt-chats-exporter.user.js) on GitHub, click **Raw**, and then click **Install** in your script manager.
-3. Open or refresh a signed-in ChatGPT or Claude.ai conversation. The floating **Export HTML** button should appear.
+3. Open or refresh a signed-in ChatGPT or Claude.ai conversation. The floating **Export HTML** button should appear. ChatGPT conversations opened inside Projects are supported through the `/g/<project>/c/<conversation>` route. A generic `/g/...` page or custom-GPT URL is not treated as a conversation.
 
 If you already have an older version installed, remove the old userscript entry from Tampermonkey before installing this one.
 
 ## Use it
 
-Open a conversation, click **Export HTML**, choose the available privacy and image options, and save the generated HTML file. In the exported file, use the **Dark mode** button in the upper-left corner to switch themes; your choice is remembered for future exports. The export also includes formatted messages, prompt navigation, copy buttons, and safe local statistics. ChatGPT images are included on a best-effort basis, and basic Claude.ai text export is supported.
+Open a conversation, click **Export HTML**, choose the available privacy, image, and branch options, and save the generated HTML file. The default export follows the currently selected branch. You can optionally include edited prompts and regenerated responses; when included, the offline file provides local branch navigation. In the exported file, use the **Dark mode** button in the upper-left corner to switch themes; your choice is remembered for future exports. The export also includes formatted messages, prompt navigation, copy buttons, and safe local statistics. ChatGPT images are included on a best-effort basis, and basic Claude.ai text export is supported.
 
 ## Privacy
 
@@ -26,7 +26,7 @@ The script does not ask for your password, persist conversation content, or call
 
 ## Current limitations
 
-The script exports only the conversation currently open in the browser; bulk or all-chat export is not supported. Provider web-app interfaces may change, and unsupported files or rich-content blocks may appear as omission markers instead of being fully rendered.
+The script exports only the conversation currently open in the browser; bulk or all-chat export is not supported. Current-branch export remains the default, while all-branch export can produce substantially larger files and is limited to the branches exposed by the provider response. Provider web-app interfaces may change, and unsupported files or rich-content blocks may appear as omission markers instead of being fully rendered.
 
 ## Development
 

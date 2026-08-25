@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.8.1
-// @description  Export the currently open ChatGPT or Claude.ai conversation to self-contained HTML with image choices and safe local statistics.
+// @version      0.9.0
+// @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, image controls, and safe local statistics.
 // @match        https://chatgpt.com/c/*
 // @match        https://chatgpt.com/s/*
+// @match        https://chatgpt.com/g/*
 // @match        https://claude.ai/chat/*
 // @run-at       document-idle
 // @grant        none
@@ -12,7 +13,7 @@
 
 (() => {
 'use strict';
-const ARCHIVER_VERSION = '0.8.1';
+const ARCHIVER_VERSION = '0.9.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -341,6 +342,50 @@ function pathFromMapping(entries, leafId) {
   return path.reverse();
 }
 
+function branchPathsFromMapping(entries, activeLeafId) {
+  const withMessages = entries.filter((entry) => entry.message);
+  const leaves = withMessages.filter((entry) => !Array.isArray(entry.children) || entry.children.length === 0);
+  const leafIds = leaves.map((entry) => entry.id);
+  const orderedLeafIds = [activeLeafId, ...leafIds.filter((id) => id !== activeLeafId)].filter(Boolean);
+  const paths = [];
+  const seenPaths = new Set();
+  for (const leafId of orderedLeafIds) {
+    try {
+      const nodes = pathFromMapping(entries, leafId);
+      const key = nodes.map((node) => node.id).join('\\u0000');
+      if (seenPaths.has(key)) continue;
+      seenPaths.add(key);
+      paths.push(nodes);
+    } catch {
+      // A malformed alternate branch must not prevent the valid active branch from exporting.
+    }
+  }
+  return paths;
+}
+
+function uniqueNormalizedMessages(messages) {
+  const unique = [];
+  const seen = new Set();
+  for (const message of messages) {
+    if (seen.has(message.id)) continue;
+    seen.add(message.id);
+    unique.push(message);
+  }
+  return unique;
+}
+
+function statsForBranch(nodes, messages) {
+  const structuralNodeCount = nodes.filter((node) => !(Object.prototype.hasOwnProperty.call(node, 'message') && !node.message)).length;
+  return {
+    messageCount: messages.length,
+    omittedBlockCount: messages.reduce((sum, message) => sum + message.omittedCount, 0),
+    sourceNodeCount: nodes.length,
+    droppedNodeCount: Math.max(0, structuralNodeCount - messages.length),
+    duplicateMessageCount: Math.max(0, nodes.filter((node) => node.message).length - messages.length),
+    hiddenMessageCount: messages.filter((message) => message.hidden).length,
+  };
+}
+
 function arrayMessages(raw) {
   if (Array.isArray(raw?.messages)) return raw.messages.map((message, index) => ({ id: message?.id ?? `message-${index + 1}`, message }));
   if (Array.isArray(raw?.data?.messages)) return raw.data.messages.map((message, index) => ({ id: message?.id ?? `message-${index + 1}`, message }));
@@ -376,12 +421,14 @@ function normalizeConversation(raw) {
   let nodes;
   let sourceShape;
   let activeBranch = true;
+  let branchNodes = [];
 
   const entries = mappingEntries(raw);
   if (entries.length > 0) {
     const leafId = chooseLeaf(entries, raw.current_node ?? raw.currentNode);
     if (!leafId) throw new ConversationShapeError('Conversation mapping contains no usable message node.', { keys: Object.keys(raw) });
     nodes = pathFromMapping(entries, leafId);
+    branchNodes = branchPathsFromMapping(entries, leafId);
     sourceShape = 'mapping-tree';
   } else {
     nodes = arrayMessages(raw);
@@ -392,19 +439,19 @@ function normalizeConversation(raw) {
   const messages = nodes.map(normalizeNode).filter(Boolean);
   if (messages.length === 0) throw new ConversationShapeError('No message nodes with recognizable content were found.', { sourceShape, keys: Object.keys(raw) });
 
-  const uniqueMessages = [];
-  const seen = new Set();
-  for (const message of messages) {
-    if (seen.has(message.id)) continue;
-    seen.add(message.id);
-    uniqueMessages.push(message);
-  }
-
-  const omittedBlockCount = uniqueMessages.reduce((sum, message) => sum + message.omittedCount, 0);
-  const structuralNodeCount = nodes.filter((node) => !(Object.prototype.hasOwnProperty.call(node, 'message') && !node.message)).length;
-  const droppedNodeCount = Math.max(0, structuralNodeCount - messages.length);
-  const duplicateMessageCount = Math.max(0, messages.length - uniqueMessages.length);
-  const hiddenMessageCount = uniqueMessages.filter((message) => message.hidden).length;
+  const uniqueMessages = uniqueNormalizedMessages(messages);
+  const branches = branchNodes.map((pathNodes, index) => {
+    const branchMessages = uniqueNormalizedMessages(pathNodes.map(normalizeNode).filter(Boolean));
+    return {
+      index,
+      leafId: pathNodes.at(-1)?.id ?? null,
+      active: index === 0,
+      messages: branchMessages,
+      stats: statsForBranch(pathNodes, branchMessages),
+    };
+  });
+  const branchCount = branches.length;
+  const baseStats = statsForBranch(nodes, uniqueMessages);
   return {
     title,
     conversationId,
@@ -412,15 +459,24 @@ function normalizeConversation(raw) {
     provider: 'ChatGPT',
     sourceShape,
     activeBranch,
+    activeBranchIndex: 0,
+    branches: branchCount > 1 ? branches : [],
     messages: uniqueMessages,
-    stats: {
-      messageCount: uniqueMessages.length,
-      omittedBlockCount,
-      sourceNodeCount: nodes.length,
-      droppedNodeCount,
-      duplicateMessageCount,
-      hiddenMessageCount,
-    },
+    stats: { ...baseStats, branchCount },
+  };
+}
+
+function selectConversationBranch(conversation, index = 0) {
+  const branches = Array.isArray(conversation?.branches) ? conversation.branches : [];
+  if (branches.length === 0) return { ...conversation, activeBranchIndex: 0, messages: conversation?.messages ?? [] };
+  const requested = Number.isInteger(index) ? index : 0;
+  const branchIndex = Math.min(Math.max(requested, 0), branches.length - 1);
+  const branch = branches[branchIndex];
+  return {
+    ...conversation,
+    activeBranchIndex: branchIndex,
+    messages: branch.messages,
+    stats: { ...conversation.stats, ...branch.stats, branchCount: branches.length },
   };
 }
 
@@ -561,8 +617,9 @@ function railLabel(text) {
 }
 
 const EXPORT_CSS = `
-:root { color-scheme: light; --bg: #f9f9f9; --surface: #fff; --text: #24292f; --muted: #57606a; --border: #e0e0e0; --user: #eef2ff; --assistant: #fff; --accent: #10a37f; --link: #0969da; }
-* { box-sizing: border-box; }
+:root { color-scheme: light; --bg: #f9f9f9; --surface: #fff; --text: #24292f; --muted: #57606a; --border: #e0e0e0; --user: #eef2ff; --assistant: #fff; --accent: #10a37f; --link: #0969da; --code-bg: #1f2328; --code-text: #e6edf3; --shadow: rgb(0 0 0 / .05); }
+	html.dark { color-scheme: dark; --bg: #0f1115; --surface: #171a21; --text: #e6edf3; --muted: #9aa4b2; --border: #303744; --user: #25213d; --assistant: #171a21; --accent: #35c89e; --link: #7ab7ff; --code-bg: #090c11; --code-text: #e6edf3; --shadow: rgb(0 0 0 / .3); }
+	* { box-sizing: border-box; }
 body { margin: 0; padding: 24px 16px 64px; background: var(--bg); color: var(--text); font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 .wrap { max-width: 820px; margin: 0 auto; }
 header.export-head { margin-bottom: 24px; }
@@ -572,8 +629,10 @@ header.export-head { margin-bottom: 24px; }
 .flag-ok { color: #1a7f37; font-weight: 600; }
 .flag-warn { color: #9a6700; font-weight: 600; }
 .warn-box { border: 1px solid #d4a72c; background: #fff8c5; color: #633c01; border-radius: 6px; padding: 10px 14px; margin: 12px 0; font-size: .9em; }
-.message { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 15px 18px; margin-bottom: 20px; position: relative; box-shadow: 0 2px 4px rgb(0 0 0 / .05); scroll-margin-top: 16px; }
-.message.user { background: var(--user); border-color: #d1d8ff; }
+	html.dark .warn-box { border-color: #9e7a1a; background: #3a2f13; color: #ffdf82; }
+.message { background: var(--assistant); border: 1px solid var(--border); border-radius: 8px; padding: 15px 18px; margin-bottom: 20px; position: relative; box-shadow: 0 2px 4px var(--shadow); scroll-margin-top: 16px; }
+	.message.user { background: var(--user); border-color: #d1d8ff; }
+	html.dark .message.user { border-color: #514c80; }
 .message:target { outline: 2px solid var(--accent); outline-offset: 2px; }
 .message h2 { margin: 0; font-size: .95em; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
 .msg-model { display: inline-block; margin-left: 8px; font-size: .88em; font-weight: 400; letter-spacing: 0; color: #8b949e; }
@@ -587,12 +646,19 @@ header.export-head { margin-bottom: 24px; }
 .image-block img { display: inline-block; max-width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--border); background: #fff; }
 .image-block figcaption { margin-top: 6px; color: var(--muted); font-size: .82em; }
 
-.content pre { white-space: pre; overflow-x: auto; background: #1f2328; color: #e6edf3; padding: 12px 14px; border-radius: 6px; margin: 12px 0; }
+.content pre { white-space: pre; overflow-x: auto; background: var(--code-bg); color: var(--code-text); padding: 12px 14px; border-radius: 6px; margin: 12px 0; }
 .content pre code { background: none; padding: 0; color: inherit; font-size: .88em; }
 .omitted, .empty-message { color: var(--muted); font-style: italic; }
 .export-footer { margin-top: 28px; color: var(--muted); font-size: .82rem; }
 .copy-btn { position: absolute; top: 12px; right: 12px; padding: 4px 10px; background: var(--accent); color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
 .copy-btn:hover { background: #0d8a6a; }
+	#theme-toggle { position: fixed; top: 12px; left: 10px; padding: 3px 8px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); border-radius: 4px; cursor: pointer; z-index: 51; }
+	#theme-toggle:hover { color: var(--text); }
+	.branch-view[hidden] { display: none; }
+.branch-nav { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 10px 0 0; }
+.branch-nav button { min-width: 34px; padding: 4px 9px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px; cursor: pointer; font-size: 18px; line-height: 1; }
+.branch-nav button:disabled { opacity: .4; cursor: default; }
+.branch-nav span { color: var(--muted); font-size: .85em; }
 #rail { max-width: 820px; margin: 0 auto 24px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
 #rail h2 { margin: 0 0 8px; color: var(--muted); font-size: .9rem; }
 #rail ol { margin: 0; padding-left: 1.4em; font-size: .9rem; }
@@ -623,6 +689,10 @@ const EXPORT_JS = [
   '(function () {',
   '  var root = document.documentElement;',
   "  root.className = root.className ? root.className + ' js' : 'js';",
+  '  var themeToggle = document.getElementById("theme-toggle");',
+  '  function setDark(dark) { root.classList.toggle("dark", dark); if (themeToggle) { themeToggle.textContent = dark ? "Light mode" : "Dark mode"; themeToggle.setAttribute("aria-pressed", dark ? "true" : "false"); } try { localStorage.setItem("chatgpt-thread-archiver-theme", dark ? "dark" : "light"); } catch (e) {} }',
+  '  var storedTheme = "light"; try { storedTheme = localStorage.getItem("chatgpt-thread-archiver-theme") || "light"; } catch (e) {} setDark(storedTheme === "dark");',
+  '  if (themeToggle) themeToggle.addEventListener("click", function () { setDark(!root.classList.contains("dark")); });',
   '  function copy(text, btn) {',
   '    var done = function () { btn.textContent = "Copied"; setTimeout(function () { btn.textContent = "Copy"; }, 1600); };',
   '    var fail = function () { btn.textContent = "Copy failed"; setTimeout(function () { btn.textContent = "Copy"; }, 1600); };',
@@ -634,6 +704,9 @@ const EXPORT_JS = [
   '    var button = event.target.closest ? event.target.closest(".copy-btn") : null;',
   '    if (button) { var body = button.parentNode.querySelector(".content"); if (body) copy(body.innerText, button); return; }',
   '  });',
+  '  var branchNav = document.getElementById("branch-nav"), branchViews = document.querySelectorAll(".branch-view"), branchPosition = document.getElementById("branch-position"), branchPrev = document.getElementById("branch-prev"), branchNext = document.getElementById("branch-next"), branchCurrent = 0;',
+  '  function showBranch(index) { if (!branchViews.length) return; branchCurrent = Math.max(0, Math.min(index, branchViews.length - 1)); for (var b = 0; b < branchViews.length; b++) branchViews[b].hidden = b !== branchCurrent; if (branchPosition) branchPosition.textContent = "Branch " + (branchCurrent + 1) + "/" + branchViews.length; if (branchPrev) branchPrev.disabled = branchCurrent === 0; if (branchNext) branchNext.disabled = branchCurrent === branchViews.length - 1; }',
+  '  if (branchNav && branchViews.length > 1) { branchPrev.addEventListener("click", function () { showBranch(branchCurrent - 1); }); branchNext.addEventListener("click", function () { showBranch(branchCurrent + 1); }); showBranch(0); }',
   '  var rail = document.getElementById("rail"), toggle = document.getElementById("rail-toggle");',
   '  if (!rail) return;',
   '  function setHidden(hidden) { rail.className = hidden ? "hidden" : ""; if (toggle) { toggle.textContent = hidden ? "Nav" : "Hide"; toggle.setAttribute("aria-expanded", hidden ? "false" : "true"); } try { sessionStorage.setItem("chatgpt-thread-archiver-rail-hidden", hidden ? "1" : "0"); } catch (e) {} }',
@@ -657,29 +730,50 @@ const EXPORT_JS = [
   '})();',
 ].join('\n');
 
-function renderConversationHtml(conversation, { exportedAt = new Date().toISOString(), sourceUrl = null, includeConversationId = false, includeTitle = true, includeMessageModels = true } = {}) {
-  const provider = typeof conversation.provider === 'string' && conversation.provider.trim() ? conversation.provider.trim() : 'ChatGPT';
-  const railItems = [];
-  const messagesHtml = conversation.messages.map((message, index) => {
-    const id = `m-${String(index + 1).padStart(4, '0')}`;
+function renderMessageList(messages, branchIndex, branchCount, includeMessageModels, railItems) {
+  return messages.map((message, index) => {
+    const id = branchCount > 1
+      ? `m-b${String(branchIndex + 1).padStart(2, '0')}-${String(index + 1).padStart(4, '0')}`
+      : `m-${String(index + 1).padStart(4, '0')}`;
     const timestamp = formatTimestamp(message.createdAt);
     const timestampValue = timestampIso(message.createdAt);
     const blocks = message.textBlocks.map(renderBlock).join('') || '<p class="empty-message">[empty message]</p>';
     const copyButton = '<button class="copy-btn" type="button">Copy</button>';
     if (message.role === 'user') {
-      railItems.push(`<li><a href="#${id}"><span>${escapeHtml(railLabel(messagePlainText(message)))}</span></a></li>`);
+      const branchPrefix = branchCount > 1 ? `Branch ${branchIndex + 1} · ` : '';
+      railItems.push(`<li><a href="#${id}"><span>${escapeHtml(branchPrefix + railLabel(messagePlainText(message)))}</span></a></li>`);
     }
     const hiddenClass = message.hidden ? ' message-hidden' : '';
     const datetime = timestampValue ? ` datetime="${escapeAttribute(timestampValue)}"` : '';
-    return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}${hiddenClass}" id="${id}" data-message-index="${index + 1}" data-message-id="${escapeAttribute(message.id)}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${messageModelLine(message, includeMessageModels)}${timestamp ? `<span class="msg-time"><time${datetime}>${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
+    return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}${hiddenClass}" id="${id}" data-message-index="${index + 1}" data-message-id="${escapeAttribute(message.id)}" data-branch-index="${branchIndex}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${messageModelLine(message, includeMessageModels)}${timestamp ? `<span class="msg-time"><time${datetime}>${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
   }).join('\n');
+}
 
-  const branchNote = conversation.activeBranch ? `Active ${provider} conversation branch exported.` : `${provider} message array exported.`;
+function renderConversationHtml(conversation, { exportedAt = new Date().toISOString(), sourceUrl = null, includeConversationId = false, includeTitle = true, includeMessageModels = true, includeAllBranches = false } = {}) {
+  const provider = typeof conversation.provider === 'string' && conversation.provider.trim() ? conversation.provider.trim() : 'ChatGPT';
+  const availableBranches = Array.isArray(conversation.branches) && conversation.branches.length > 1 ? conversation.branches : [];
+  const branchRecords = includeAllBranches && availableBranches.length > 1
+    ? availableBranches
+    : [{ index: 0, messages: conversation.messages, active: true, stats: conversation.stats }];
+  const branchCount = branchRecords.length;
+  const availableBranchCount = availableBranches.length || (conversation.stats?.branchCount ?? 0);
+  const railItems = [];
+  const renderedMessages = branchRecords.flatMap((branch) => branch.messages ?? []);
+  const messagesHtml = branchRecords.map((branch, index) => `<div class="branch-view" data-branch-index="${index}">${renderMessageList(branch.messages, index, branchCount, includeMessageModels, railItems)}</div>`).join('\n');
+  const branchNavigator = branchCount > 1
+    ? `<div id="branch-nav" class="branch-nav" role="group" aria-label="Conversation branches"><button id="branch-prev" type="button" aria-label="Previous branch">‹</button><span id="branch-position">Branch 1/${branchCount}</span><button id="branch-next" type="button" aria-label="Next branch">›</button></div>`
+    : '';
+  const branchNote = branchCount > 1
+    ? `All ${provider} conversation branches exported.`
+    : conversation.activeBranch
+      ? (availableBranchCount > 1 ? `Active ${provider} conversation branch exported; ${availableBranchCount - 1} alternate branch${availableBranchCount === 2 ? '' : 'es'} available.` : `Active ${provider} conversation branch exported.`)
+      : `${provider} message array exported.`;
   const rawTitle = includeTitle ? conversation.title : `${provider} conversation`;
   const title = escapeHtml(rawTitle);
   const idMeta = includeConversationId && conversation.conversationId ? `<meta name="conversation-id" content="${escapeAttribute(conversation.conversationId)}">` : '';
   const sourceBlock = sourceUrl ? `<p class="meta">Source: <a href="${escapeAttribute(sourceUrl)}" rel="noopener noreferrer">${escapeHtml(sourceUrl)}</a></p>` : '';
-  const metadata = `<p class="meta">Exported ${escapeHtml(exportedAt)} · ${conversation.stats.messageCount} message${conversation.stats.messageCount === 1 ? '' : 's'} (${escapeHtml(roleCounts(conversation.messages, provider))})</p>`;
+  const metadata = `<p class="meta">Exported ${escapeHtml(exportedAt)} · ${renderedMessages.length} message${renderedMessages.length === 1 ? '' : 's'} (${escapeHtml(roleCounts(renderedMessages, provider))})</p>`;
+  const branchLine = availableBranchCount > 1 ? `<p class="meta">Branches: ${branchCount > 1 ? `${branchCount} exported` : `1 of ${availableBranchCount} exported`}</p>` : '';
   const modelLine = formatModels(conversation);
   const statsLine = formatLocalStats(conversation.stats);
   const omissionLine = conversation.stats.omittedBlockCount > 0
@@ -707,12 +801,14 @@ ${idMeta}
 <style>${EXPORT_CSS}</style>
 </head>
 <body>
+<button id="theme-toggle" type="button" aria-pressed="false">Dark mode</button>
 <button id="rail-toggle" type="button" aria-controls="rail" aria-expanded="true">Hide</button>
 <nav id="rail" aria-label="Prompts"><h2>Prompts</h2><ol>${railItems.join('')}</ol></nav>
 <div class="wrap">
 <header class="export-head">
   <h1>${title}</h1>
   ${metadata}
+  ${branchLine}
   ${modelLine}
   ${statsLine}
   ${sourceBlock}
@@ -720,7 +816,8 @@ ${idMeta}
   ${imageLine}
   ${coverageLine}
   ${hiddenLine}
-  </header>
+  ${branchNavigator}
+</header>
 <main>
 <section aria-label="Conversation messages">
 ${messagesHtml}
@@ -772,7 +869,20 @@ function parseConversationRoute(url = globalThis.location?.href ?? '') {
   try {
     const parsed = new URL(url);
     const parts = parsed.pathname.split('/').filter(Boolean);
-    const routeIndex = parts.findIndex((part) => part === 'c' || part === 'conversation');
+    if (parts[0] === 'g') {
+      if (parts[2] !== 'c') {
+        return { kind: 'project', conversationId: null, pathname: parsed.pathname, routeSegment: 'g', reason: 'Projects route has no specific conversation path' };
+      }
+      const rawId = parts[3];
+      if (!rawId) return { kind: 'missing-id', conversationId: null, pathname: parsed.pathname, routeSegment: 'g', reason: 'Project conversation route has no conversation ID' };
+      return {
+        kind: 'conversation',
+        conversationId: decodeURIComponent(rawId),
+        pathname: parsed.pathname,
+        routeSegment: 'g',
+      };
+    }
+    const routeIndex = parts.findIndex((part) => part === 'c' || part === 's' || part === 'conversation');
     if (routeIndex >= 0) {
       const rawId = parts[routeIndex + 1];
       if (!rawId) return { kind: 'missing-id', conversationId: null, pathname: parsed.pathname, reason: 'conversation route has no ID' };
@@ -803,7 +913,7 @@ function isChatGPTHost(locationLike = globalThis.location) {
 function isExporterRoute(url = globalThis.location?.href ?? '') {
   try {
     const parsed = new URL(url);
-    return parsed.hostname === 'chatgpt.com' && /^\/(?:c|s)\/.+/.test(parsed.pathname);
+    return parsed.hostname === 'chatgpt.com' && parseConversationRoute(url).kind === 'conversation';
   } catch {
     return false;
   }
@@ -1159,7 +1269,24 @@ function redactRoutePath(route) {
   const pathname = String(route?.pathname ?? '');
   if (!pathname) return '<unknown-path>';
   const parts = pathname.split('/');
-  const routeIndex = parts.findIndex((part) => part === 'c' || part === 'conversation' || part === 'share');
+  if (parts[1] === 'g') {
+    if (parts[2]) {
+      let projectId = parts[2];
+      try { projectId = decodeURIComponent(projectId); } catch {
+        projectId = '';
+      }
+      parts[2] = redactId(projectId);
+    }
+    if (parts[3] === 'c' && parts[4]) {
+      let conversationId = parts[4];
+      try { conversationId = decodeURIComponent(conversationId); } catch {
+        conversationId = '';
+      }
+      parts[4] = redactId(conversationId);
+    }
+    return parts.join('/');
+  }
+  const routeIndex = parts.findIndex((part) => part === 'c' || part === 's' || part === 'conversation' || part === 'share');
   if (routeIndex >= 0 && parts[routeIndex + 1]) {
     let decoded = parts[routeIndex + 1];
     try { decoded = decodeURIComponent(decoded); } catch {
@@ -1368,41 +1495,85 @@ function normalizeClaudeMessage(message, index) {
   };
 }
 
-function orderedClaudeMessages(raw) {
-  const all = Array.isArray(raw?.chat_messages) ? raw.chat_messages : [];
-  if (all.length === 0) throw new ClaudeClientError('shape', 'Claude returned no conversation messages.');
-  const byId = new Map(all.map((message) => [String(message?.uuid ?? message?.id ?? ''), message]));
-  const leafId = String(raw?.current_leaf_message_uuid ?? '');
+function claudeMessageId(message) {
+  return String(message?.uuid ?? message?.id ?? '');
+}
+
+function claudePathToLeaf(byId, leafId) {
   const path = [];
   const seen = new Set();
   let current = leafId && byId.has(leafId) ? byId.get(leafId) : null;
-  while (current && !seen.has(String(current?.uuid ?? current?.id ?? ''))) {
-    seen.add(String(current?.uuid ?? current?.id ?? ''));
+  while (current && !seen.has(claudeMessageId(current))) {
+    seen.add(claudeMessageId(current));
     path.push(current);
     const parentId = String(current?.parent_message_uuid ?? current?.parent ?? '');
     current = parentId ? byId.get(parentId) : null;
   }
-  if (path.length > 0) return { messages: path.reverse(), activeBranch: true };
-  return {
-    messages: [...all].sort((left, right) => Number(left?.index ?? 0) - Number(right?.index ?? 0)),
-    activeBranch: false,
-  };
+  return path.reverse();
+}
+
+function orderedClaudeMessages(raw) {
+  const all = Array.isArray(raw?.chat_messages) ? raw.chat_messages : [];
+  if (all.length === 0) throw new ClaudeClientError('shape', 'Claude returned no conversation messages.');
+  const byId = new Map(all.map((message) => [claudeMessageId(message), message]));
+  const currentLeaf = String(raw?.current_leaf_message_uuid ?? '');
+  const children = new Set(all.map((message) => String(message?.parent_message_uuid ?? message?.parent ?? '')).filter(Boolean));
+  const leaves = all.filter((message) => !children.has(claudeMessageId(message)));
+  const orderedLeafIds = [currentLeaf, ...leaves.map(claudeMessageId).filter((id) => id !== currentLeaf)].filter(Boolean);
+  const branchPaths = [];
+  const seenPaths = new Set();
+  for (const leafId of orderedLeafIds) {
+    const path = claudePathToLeaf(byId, leafId);
+    const key = path.map(claudeMessageId).join('\\u0000');
+    if (!path.length || seenPaths.has(key)) continue;
+    seenPaths.add(key);
+    branchPaths.push(path);
+  }
+  if (branchPaths.length > 0) return { messages: branchPaths[0], branchPaths, activeBranch: Boolean(currentLeaf && byId.has(currentLeaf)) };
+  const fallback = [...all].sort((left, right) => Number(left?.index ?? 0) - Number(right?.index ?? 0));
+  return { messages: fallback, branchPaths: [fallback], activeBranch: false };
 }
 
 function normalizeClaudeConversation(raw, conversationId = null) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new ClaudeClientError('shape', 'Claude returned an invalid conversation object.');
   const ordered = orderedClaudeMessages(raw);
-  const messages = ordered.messages.map(normalizeClaudeMessage);
-  const uniqueMessages = [];
-  const seen = new Set();
-  for (const message of messages) {
-    if (seen.has(message.id)) continue;
-    seen.add(message.id);
-    uniqueMessages.push(message);
-  }
-  const omittedBlockCount = uniqueMessages.reduce((sum, message) => sum + message.omittedCount, 0);
-  const duplicateMessageCount = Math.max(0, messages.length - uniqueMessages.length);
-  const hiddenMessageCount = uniqueMessages.filter((message) => message.hidden).length;
+  const normalizePath = (path) => {
+    const normalized = path.map(normalizeClaudeMessage);
+    const unique = [];
+    const seen = new Set();
+    for (const message of normalized) {
+      if (seen.has(message.id)) continue;
+      seen.add(message.id);
+      unique.push(message);
+    }
+    return unique;
+  };
+  const messages = normalizePath(ordered.messages);
+  const branches = ordered.branchPaths.map((path, index) => {
+    const branchMessages = normalizePath(path);
+    const sourceNodeCount = path.length;
+    return {
+      index,
+      leafId: claudeMessageId(path.at(-1)),
+      active: index === 0,
+      messages: branchMessages,
+      stats: {
+        messageCount: branchMessages.length,
+        omittedBlockCount: branchMessages.reduce((sum, message) => sum + message.omittedCount, 0),
+        sourceNodeCount,
+        droppedNodeCount: Math.max(0, sourceNodeCount - branchMessages.length),
+        duplicateMessageCount: Math.max(0, sourceNodeCount - branchMessages.length),
+        hiddenMessageCount: branchMessages.filter((message) => message.hidden).length,
+        imageCount: 0,
+        imageEmbeddedCount: 0,
+        imageExcludedCount: 0,
+        imageUnavailableCount: 0,
+        imageBytes: 0,
+        imageBudgetLimitedCount: 0,
+      },
+    };
+  });
+  const uniqueMessages = messages;
   const allCount = Array.isArray(raw.chat_messages) ? raw.chat_messages.length : uniqueMessages.length;
   return {
     title: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : (typeof raw.title === 'string' && raw.title.trim() ? raw.title.trim() : 'Claude conversation'),
@@ -1411,16 +1582,20 @@ function normalizeClaudeConversation(raw, conversationId = null) {
     provider: 'Claude',
     sourceShape: 'claude-message-tree',
     activeBranch: ordered.activeBranch,
+    activeBranchIndex: 0,
+    branches: branches.length > 1 ? branches : [],
     messages: uniqueMessages,
     stats: {
+      ...branches[0]?.stats,
       messageCount: uniqueMessages.length,
-      omittedBlockCount,
       sourceNodeCount: allCount,
       droppedNodeCount: ordered.activeBranch ? Math.max(0, allCount - ordered.messages.length) : 0,
-      duplicateMessageCount,
-      hiddenMessageCount,
+      duplicateMessageCount: branches[0]?.stats?.duplicateMessageCount ?? 0,
+      hiddenMessageCount: uniqueMessages.filter((message) => message.hidden).length,
+      branchCount: branches.length,
       imageCount: 0,
       imageEmbeddedCount: 0,
+      imageExcludedCount: 0,
       imageUnavailableCount: 0,
       imageBytes: 0,
       imageBudgetLimitedCount: 0,
@@ -1632,13 +1807,14 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
   return asAssetResult('unavailable', lastReason, { fileId });
 }
 
-async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null, includeImages = true, selectedImageIndices = null } = {}) {
+async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null, includeImages = true, selectedImageIndices = null, imageIndexOffset = 0 } = {}) {
   if (!conversation || !Array.isArray(conversation.messages)) return conversation;
   const imageBlocks = conversation.messages.flatMap((message) => (message.textBlocks ?? []).filter((block) => block.type === 'image').map((block) => ({ block, postId: message.id })));
   if (imageBlocks.length === 0) return { ...conversation, stats: { ...conversation.stats, imageCount: 0, imageEmbeddedCount: 0, imageExcludedCount: 0, imageUnavailableCount: 0, imageBytes: 0, imageBudgetLimitedCount: 0 } };
 
   const selected = selectedImageIndices === null ? null : new Set(selectedImageIndices);
-  const shouldInclude = (index) => Boolean(includeImages) && (selected === null || selected.has(index));
+  const safeImageIndexOffset = Number.isInteger(imageIndexOffset) && imageIndexOffset >= 0 ? imageIndexOffset : 0;
+  const shouldInclude = (index) => Boolean(includeImages) && (selected === null || selected.has(index + safeImageIndexOffset));
   const shouldResolveAny = Boolean(includeImages) && (selected === null || selected.size > 0);
   const auth = shouldResolveAny ? (authContext ?? await getAuthContext(fetchImpl)) : null;
   const cache = new Map();
@@ -1813,7 +1989,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
   }
 
   function defaultPrefs() {
-    return { url: true, title: true, conversationId: false, imageMode: 'all', messageModels: true };
+    return { url: true, title: true, conversationId: false, imageMode: 'all', messageModels: true, branchMode: 'active' };
   }
 
   function parsePrefs(raw) {
@@ -1824,7 +2000,8 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
       if (!value || typeof value !== 'object' || keys.some((key) => typeof value[key] !== 'boolean')) return null;
       const imageMode = ['all', 'none', 'choose'].includes(value.imageMode) ? value.imageMode : 'all';
       const messageModels = typeof value.messageModels === 'boolean' ? value.messageModels : true;
-      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode, messageModels };
+      const branchMode = ['active', 'all'].includes(value.branchMode) ? value.branchMode : 'active';
+      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode, messageModels, branchMode };
     } catch {
       return null;
     }
@@ -1868,6 +2045,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
         conversationId: Boolean(prefs.conversationId),
         imageMode: ['all', 'none', 'choose'].includes(prefs.imageMode) ? prefs.imageMode : 'all',
         messageModels: prefs.messageModels !== false,
+        branchMode: ['active', 'all'].includes(prefs.branchMode) ? prefs.branchMode : 'active',
       }));
     } catch {
       // Preference persistence is optional and must never block an export.
@@ -1909,20 +2087,26 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
   }
 
   function imageEntries(conversation) {
+    const branchRecords = Array.isArray(conversation?.branches) && conversation.branches.length > 1
+      ? conversation.branches
+      : [{ index: 0, messages: conversation?.messages ?? [] }];
     let index = 0;
-    let turnIndex = 0;
     const entries = [];
-    for (const message of (conversation?.messages ?? [])) {
-      if (message.role !== 'unknown') turnIndex += 1;
-      for (const block of message.textBlocks ?? []) {
-        if (block.type !== 'image') continue;
-        entries.push({
-          index: index++,
-          messageIndex: turnIndex,
-          speaker: message.authorLabel ?? (message.role === 'user' ? 'You' : 'ChatGPT'),
-          generated: Boolean(block.asset?.generated),
-          sizeBytes: Number.isFinite(block.asset?.sizeBytes) ? block.asset.sizeBytes : null,
-        });
+    for (const branch of branchRecords) {
+      let turnIndex = 0;
+      for (const message of branch.messages ?? []) {
+        if (message.role !== 'unknown') turnIndex += 1;
+        for (const block of message.textBlocks ?? []) {
+          if (block.type !== 'image') continue;
+          entries.push({
+            index: index++,
+            branchIndex: branch.index ?? 0,
+            messageIndex: turnIndex,
+            speaker: message.authorLabel ?? (message.role === 'user' ? 'You' : 'ChatGPT'),
+            generated: Boolean(block.asset?.generated),
+            sizeBytes: Number.isFinite(block.asset?.sizeBytes) ? block.asset.sizeBytes : null,
+          });
+        }
       }
     }
     return entries;
@@ -1954,7 +2138,8 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
       fieldset.appendChild(legend);
       const inputs = [];
       for (const entry of entries) {
-        const image = checkbox(`cge-image-${entry.index}`, `Image ${entry.index + 1} · message ${entry.messageIndex} · ${entry.speaker} · ${entry.generated ? 'generated' : 'uploaded/reference'} · ${formatImageSize(entry.sizeBytes)}`, true);
+        const branchLabel = entries.some((candidate) => candidate.branchIndex !== entry.branchIndex) ? ` · branch ${entry.branchIndex + 1}` : '';
+        const image = checkbox(`cge-image-${entry.index}`, `Image ${entry.index + 1}${branchLabel} · message ${entry.messageIndex} · ${entry.speaker} · ${entry.generated ? 'generated' : 'uploaded/reference'} · ${formatImageSize(entry.sizeBytes)}`, true);
         image.input.dataset.imageIndex = String(entry.index);
         inputs.push(image.input);
         fieldset.appendChild(image.wrapper);
@@ -2000,6 +2185,16 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
     const messageModels = checkbox('cge-pref-message-models', 'Show a model label on each assistant message', prefs.messageModels);
     const imageChoices = [];
     let imageFieldset = null;
+    const branchChoices = [];
+    const branchFieldset = document.createElement('fieldset');
+    const branchLegend = document.createElement('legend');
+    branchLegend.textContent = 'Conversation branches';
+    branchFieldset.appendChild(branchLegend);
+    for (const choice of [['active', 'Export current branch only'], ['all', 'Include edited and regenerated branches']]) {
+      const branchRadio = radio('cge-branch-mode', `cge-branch-mode-${choice[0]}`, choice[1], choice[0], prefs.branchMode === choice[0]);
+      branchChoices.push(branchRadio.input);
+      branchFieldset.appendChild(branchRadio.wrapper);
+    }
     if (provider === 'ChatGPT') {
       imageFieldset = document.createElement('fieldset');
       const imageLegend = document.createElement('legend');
@@ -2022,7 +2217,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
     exportButton.className = 'cge-primary';
     exportButton.textContent = 'Export HTML';
     actions.append(cancel, exportButton);
-    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper, messageModels.wrapper);
+    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper, messageModels.wrapper, branchFieldset);
     if (imageFieldset) card.appendChild(imageFieldset);
     card.appendChild(actions);
     overlay.appendChild(card);
@@ -2038,6 +2233,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
         conversationId: conversationId.input.checked,
         messageModels: messageModels.input.checked,
         imageMode: provider === 'ChatGPT' ? (imageChoices.find((input) => input.checked)?.value ?? prefs.imageMode) : prefs.imageMode,
+        branchMode: branchChoices.find((input) => input.checked)?.value ?? prefs.branchMode,
       };
       savePrefs(chosen);
       close();
@@ -2050,6 +2246,46 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
     if (prefs.title) return sanitizeFilename(conversation.title);
     const stamp = exportedAt.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
     return sanitizeFilename(`chatgpt-export-${stamp}`);
+  }
+
+  function aggregateBranchStats(conversation) {
+    const branches = Array.isArray(conversation?.branches) ? conversation.branches : [];
+    if (branches.length <= 1) return conversation?.stats ?? {};
+    const sumKeys = ['omittedBlockCount', 'sourceNodeCount', 'droppedNodeCount', 'duplicateMessageCount', 'hiddenMessageCount'];
+    return {
+      ...(conversation.stats ?? {}),
+      ...Object.fromEntries(sumKeys.map((key) => [key, branches.reduce((sum, branch) => sum + Number(branch.stats?.[key] ?? 0), 0)])),
+      branchCount: branches.length,
+    };
+  }
+
+  async function resolveAllConversationBranches(conversation, options = {}) {
+    const branches = Array.isArray(conversation?.branches) && conversation.branches.length > 1 ? conversation.branches : [];
+    if (branches.length === 0) return resolveConversationImages(conversation, options);
+    const totalImages = imageEntries(conversation).length;
+    let imageOffset = 0;
+    let completed = 0;
+    const resolvedBranches = [];
+    for (const branch of branches) {
+      const branchConversation = { ...conversation, messages: branch.messages, branches: [], stats: branch.stats };
+      const branchImageCount = imageEntries(branchConversation).length;
+      const resolved = await resolveConversationImages(branchConversation, {
+        ...options,
+        imageIndexOffset: imageOffset,
+        onProgress: () => options.onProgress?.(++completed, totalImages),
+      });
+      resolvedBranches.push({ ...branch, messages: resolved.messages, stats: resolved.stats });
+      imageOffset += branchImageCount;
+    }
+    const allMessages = resolvedBranches.flatMap((branch) => branch.messages);
+    const imageStats = ['imageCount', 'imageEmbeddedCount', 'imageExcludedCount', 'imageUnavailableCount', 'imageBytes', 'imageBudgetLimitedCount']
+      .reduce((summary, key) => ({ ...summary, [key]: resolvedBranches.reduce((sum, branch) => sum + Number(branch.stats?.[key] ?? 0), 0) }), {});
+    return {
+      ...conversation,
+      messages: resolvedBranches[0]?.messages ?? conversation.messages,
+      branches: resolvedBranches,
+      stats: { ...conversation.stats, ...imageStats, messageCount: allMessages.length },
+    };
   }
 
   async function exportCurrentConversation(button, prefs = loadPrefs(), provider = providerForLocation()) {
@@ -2070,6 +2306,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
       const raw = provider === 'Claude' ? await fetchClaudeConversation(conversationId) : await fetchConversation(conversationId);
       showStatus('Formatting messages…');
       const normalized = provider === 'Claude' ? normalizeClaudeConversation(raw, conversationId) : normalizeConversation(raw);
+      const includeAllBranches = prefs.branchMode === 'all' && Array.isArray(normalized.branches) && normalized.branches.length > 1;
       let selectedImageIndices = null;
       let includeImages = true;
       if (provider === 'ChatGPT') {
@@ -2085,13 +2322,22 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
       }
       const conversation = provider === 'Claude'
         ? normalized
-        : await resolveConversationImages(normalized, {
-          conversationId,
-          includeImages,
-          selectedImageIndices,
-          onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
-        });
-      const exportStats = deriveExportStats(conversation.messages, conversation.stats, { model: conversation.model });
+        : includeAllBranches
+          ? await resolveAllConversationBranches(normalized, {
+            conversationId,
+            includeImages,
+            selectedImageIndices,
+            onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
+          })
+          : await resolveConversationImages(normalized, {
+            conversationId,
+            includeImages,
+            selectedImageIndices,
+            onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
+          });
+      const statsMessages = includeAllBranches ? conversation.branches.flatMap((branch) => branch.messages) : conversation.messages;
+      const statsBase = includeAllBranches ? aggregateBranchStats(conversation) : conversation.stats;
+      const exportStats = deriveExportStats(statsMessages, statsBase, { model: conversation.model });
       const exportableConversation = { ...conversation, stats: exportStats };
       const exportedAt = new Date().toISOString();
       const html = renderConversationHtml(exportableConversation, {
@@ -2100,6 +2346,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
         includeConversationId: prefs.conversationId,
         includeTitle: prefs.title,
         includeMessageModels: prefs.messageModels !== false,
+        includeAllBranches,
       });
       downloadHtml(html, filenameFor(exportableConversation, prefs, exportedAt));
       const imageSummary = Number.isFinite(exportStats.imageCount) && exportStats.imageCount > 0

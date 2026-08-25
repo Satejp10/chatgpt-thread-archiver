@@ -547,8 +547,9 @@ function railLabel(text) {
 }
 
 const EXPORT_CSS = `
-:root { color-scheme: light; --bg: #f9f9f9; --surface: #fff; --text: #24292f; --muted: #57606a; --border: #e0e0e0; --user: #eef2ff; --assistant: #fff; --accent: #10a37f; --link: #0969da; }
-* { box-sizing: border-box; }
+:root { color-scheme: light; --bg: #f9f9f9; --surface: #fff; --text: #24292f; --muted: #57606a; --border: #e0e0e0; --user: #eef2ff; --assistant: #fff; --accent: #10a37f; --link: #0969da; --code-bg: #1f2328; --code-text: #e6edf3; --shadow: rgb(0 0 0 / .05); }
+	html.dark { color-scheme: dark; --bg: #0f1115; --surface: #171a21; --text: #e6edf3; --muted: #9aa4b2; --border: #303744; --user: #25213d; --assistant: #171a21; --accent: #35c89e; --link: #7ab7ff; --code-bg: #090c11; --code-text: #e6edf3; --shadow: rgb(0 0 0 / .3); }
+	* { box-sizing: border-box; }
 body { margin: 0; padding: 24px 16px 64px; background: var(--bg); color: var(--text); font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 .wrap { max-width: 820px; margin: 0 auto; }
 header.export-head { margin-bottom: 24px; }
@@ -558,8 +559,10 @@ header.export-head { margin-bottom: 24px; }
 .flag-ok { color: #1a7f37; font-weight: 600; }
 .flag-warn { color: #9a6700; font-weight: 600; }
 .warn-box { border: 1px solid #d4a72c; background: #fff8c5; color: #633c01; border-radius: 6px; padding: 10px 14px; margin: 12px 0; font-size: .9em; }
-.message { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 15px 18px; margin-bottom: 20px; position: relative; box-shadow: 0 2px 4px rgb(0 0 0 / .05); scroll-margin-top: 16px; }
-.message.user { background: var(--user); border-color: #d1d8ff; }
+	html.dark .warn-box { border-color: #9e7a1a; background: #3a2f13; color: #ffdf82; }
+.message { background: var(--assistant); border: 1px solid var(--border); border-radius: 8px; padding: 15px 18px; margin-bottom: 20px; position: relative; box-shadow: 0 2px 4px var(--shadow); scroll-margin-top: 16px; }
+	.message.user { background: var(--user); border-color: #d1d8ff; }
+	html.dark .message.user { border-color: #514c80; }
 .message:target { outline: 2px solid var(--accent); outline-offset: 2px; }
 .message h2 { margin: 0; font-size: .95em; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
 .msg-model { display: inline-block; margin-left: 8px; font-size: .88em; font-weight: 400; letter-spacing: 0; color: #8b949e; }
@@ -573,13 +576,15 @@ header.export-head { margin-bottom: 24px; }
 .image-block img { display: inline-block; max-width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--border); background: #fff; }
 .image-block figcaption { margin-top: 6px; color: var(--muted); font-size: .82em; }
 
-.content pre { white-space: pre; overflow-x: auto; background: #1f2328; color: #e6edf3; padding: 12px 14px; border-radius: 6px; margin: 12px 0; }
+.content pre { white-space: pre; overflow-x: auto; background: var(--code-bg); color: var(--code-text); padding: 12px 14px; border-radius: 6px; margin: 12px 0; }
 .content pre code { background: none; padding: 0; color: inherit; font-size: .88em; }
 .omitted, .empty-message { color: var(--muted); font-style: italic; }
 .export-footer { margin-top: 28px; color: var(--muted); font-size: .82rem; }
 .copy-btn { position: absolute; top: 12px; right: 12px; padding: 4px 10px; background: var(--accent); color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
 .copy-btn:hover { background: #0d8a6a; }
-#rail { max-width: 820px; margin: 0 auto 24px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+	#theme-toggle { position: fixed; top: 12px; left: 10px; padding: 3px 8px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); border-radius: 4px; cursor: pointer; z-index: 51; }
+	#theme-toggle:hover { color: var(--text); }
+	#rail { max-width: 820px; margin: 0 auto 24px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
 #rail h2 { margin: 0 0 8px; color: var(--muted); font-size: .9rem; }
 #rail ol { margin: 0; padding-left: 1.4em; font-size: .9rem; }
 #rail li { margin: 2px 0; }
@@ -609,6 +614,10 @@ const EXPORT_JS = [
   '(function () {',
   '  var root = document.documentElement;',
   "  root.className = root.className ? root.className + ' js' : 'js';",
+  '  var themeToggle = document.getElementById("theme-toggle");',
+  '  function setDark(dark) { root.classList.toggle("dark", dark); if (themeToggle) { themeToggle.textContent = dark ? "Light mode" : "Dark mode"; themeToggle.setAttribute("aria-pressed", dark ? "true" : "false"); } try { localStorage.setItem("chatgpt-thread-archiver-theme", dark ? "dark" : "light"); } catch (e) {} }',
+  '  var storedTheme = "light"; try { storedTheme = localStorage.getItem("chatgpt-thread-archiver-theme") || "light"; } catch (e) {} setDark(storedTheme === "dark");',
+  '  if (themeToggle) themeToggle.addEventListener("click", function () { setDark(!root.classList.contains("dark")); });',
   '  function copy(text, btn) {',
   '    var done = function () { btn.textContent = "Copied"; setTimeout(function () { btn.textContent = "Copy"; }, 1600); };',
   '    var fail = function () { btn.textContent = "Copy failed"; setTimeout(function () { btn.textContent = "Copy"; }, 1600); };',
@@ -693,6 +702,7 @@ ${idMeta}
 <style>${EXPORT_CSS}</style>
 </head>
 <body>
+<button id="theme-toggle" type="button" aria-pressed="false">Dark mode</button>
 <button id="rail-toggle" type="button" aria-controls="rail" aria-expanded="true">Hide</button>
 <nav id="rail" aria-label="Prompts"><h2>Prompts</h2><ol>${railItems.join('')}</ol></nav>
 <div class="wrap">

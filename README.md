@@ -6,19 +6,19 @@ It runs locally in your browser, uses your existing signed-in session, and does 
 
 ## Install
 
-### Quick install with Tampermonkey
+### Quick install with Tampermonkey or another userscript manager
 
 ![Visual installation guide: install Tampermonkey, open the userscript, click Raw, and click Install](docs/assets/install-guide.png)
 
-1. Install [Tampermonkey](https://www.tampermonkey.net/) for your browser and accept the browser's extension prompt.
-2. Open [`dist/chatgpt-chats-exporter.user.js`](https://github.com/Satejp10/chatgpt-thread-archiver/blob/main/dist/chatgpt-chats-exporter.user.js) on GitHub, click **Raw**, and then click **Install** in Tampermonkey.
+1. Install [Tampermonkey](https://www.tampermonkey.net/) (or any other userscript manager you prefer) for your browser and accept the browser's extension prompt.
+2. Open [`dist/chatgpt-chats-exporter.user.js`](https://github.com/Satejp10/chatgpt-thread-archiver/blob/main/dist/chatgpt-chats-exporter.user.js) on GitHub, click **Raw**, and then click **Install** in your script manager.
 3. Open or refresh a signed-in ChatGPT or Claude.ai conversation. The floating **Export HTML** button should appear.
 
 If you already have an older version installed, remove the old userscript entry from Tampermonkey before installing this one.
 
 ## Use it
 
-Open a conversation, click **Export HTML**, choose the available privacy and image options, and save the generated HTML file. The export includes formatted messages, prompt navigation, copy buttons, and safe local statistics. ChatGPT images are included on a best-effort basis, and basic Claude.ai text export is supported.
+Open a conversation, click **Export HTML**, choose the available privacy and image options, and save the generated HTML file. In the exported file, use the **Dark mode** button in the upper-left corner to switch themes; your choice is remembered for future exports. The export also includes formatted messages, prompt navigation, copy buttons, and safe local statistics. ChatGPT images are included on a best-effort basis, and basic Claude.ai text export is supported.
 
 ## Privacy
 

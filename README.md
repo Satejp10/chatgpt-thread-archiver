@@ -8,6 +8,8 @@ It runs locally in your browser, uses your existing signed-in session, and does 
 
 ### Quick install with Tampermonkey
 
+![Visual installation guide: install Tampermonkey, open the userscript, click Raw, and click Install](docs/assets/install-guide.png)
+
 1. Install [Tampermonkey](https://www.tampermonkey.net/) for your browser and accept the browser's extension prompt.
 2. Open [`dist/chatgpt-chats-exporter.user.js`](https://github.com/Satejp10/chatgpt-thread-archiver/blob/main/dist/chatgpt-chats-exporter.user.js) on GitHub, click **Raw**, and then click **Install** in Tampermonkey.
 3. Open or refresh a signed-in ChatGPT or Claude.ai conversation. The floating **Export HTML** button should appear.

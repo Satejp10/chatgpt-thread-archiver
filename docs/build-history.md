@@ -7,8 +7,8 @@ This document is the maintainer-facing build record for **ChatGPT Thread Archive
 | Item | Value |
 |---|---|
 | Stable branch | `main` |
-| Current release | `v0.8.1` |
-| Latest stable merge commit | `42d8327` |
+| Current release | `v0.9.0` |
+| Latest stable merge commit | `aefd2e2` |
 | Canonical installable artifact | `dist/chatgpt-chats-exporter.user.js` |
 | Root convenience artifact | `chatgpt-chats-exporter.user.js` |
 | Artifact rule | Root and `dist/` userscripts must be byte-identical |
@@ -47,8 +47,9 @@ The current bundling order is important. `build.mjs` concatenates `src/core.mjs`
 
 | Release | Main purpose | Validation status | Release state |
 |---|---|---|---|
-| `v0.9.0` | ChatGPT Projects `/g/*` activation and optional all-branch export for edited prompts/regenerated responses | Local build/check completed; live Projects and branch testing remains | Candidate on feature branch |
-| `v0.8.1` | Optional per-message model labels with explicit unknown/not-found wording, plus dark-theme export toggle | Local build/check completed; live model-label/theme testing remains | **Current stable release** |
+| `v0.9.1` | Fix the exported offline interaction script so Dark mode, Copy, and navigation controls initialize | Local build/check pending final validation; live offline-control testing remains | Candidate on feature branch |
+| `v0.9.0` | ChatGPT Projects `/g/*` activation and optional all-branch export for edited prompts/regenerated responses | Local build/check completed; live Projects and branch testing remains | **Current stable release** |
+| `v0.8.1` | Optional per-message model labels with explicit unknown/not-found wording, plus dark-theme export toggle | Local build/check completed; live model-label/theme testing remains | Historical |
 | `v0.8.0` | Per-export ChatGPT image choices: include all, exclude all, or choose individual images | Local build/check completed; live image-choice testing remains | Historical |
 | `v0.7.0` | Expanded ChatGPT image recovery and safe local export statistics | Local build/check completed; live image testing remains | Historical |
 | `v0.6.0` | Basic Claude.ai text export, shared model display, provider-scoped activation | Local build/check completed; live Claude testing completed by product owner | Historical |
@@ -64,7 +65,22 @@ The current bundling order is important. `build.mjs` concatenates `src/core.mjs`
 | `v0.5.0` | Audit remediation: structured-field preservation, attachment markers, coverage reporting, hidden-message labels, ISO timestamps, branch fallback, filename hardening, SPA recovery, image budgets | Local build/check completed | Historical remediation release |
 | `v0.5.1` | Restrict activation to `/c/*` and `/s/*`; lift mobile controls above the composer/send area | Local build/check completed; live testing owned by the user | Historical |
 
-## Validation record for v0.9.0 candidate
+## Validation record for v0.9.1 candidate
+
+The v0.9.1 candidate is being prepared on `fix-offline-controls` from merged `origin/main` after reproducing a shared offline-script syntax error that disabled Dark mode, Copy, branch navigation, and prompt-rail controls.
+
+| Check | Result |
+|---|---|
+| `npm run build` | Pending final validation |
+| `npm run check` | Pending final validation |
+| `node --check dist/chatgpt-chats-exporter.user.js` | Pending final validation |
+| Root/dist byte comparison | Pending final artifact sync |
+| Offline Dark mode and Copy browser check | Passed after source correction |
+| Live acceptance of downloaded v0.9.1 artifact | Pending product-owner testing |
+
+The candidate is not the stable release until local validation, live offline-control testing, and the normal pull-request review/merge process are complete.
+
+## Validation record for v0.9.0 release
 
 The v0.9.0 candidate was built and checked on 2026-08-25 on `pending-projects-theme-branches` after adding ChatGPT Projects-route activation, branch retention for ChatGPT and Claude.ai, optional all-branch rendering, offline branch navigation, and branch-aware image-selection offsets.
 

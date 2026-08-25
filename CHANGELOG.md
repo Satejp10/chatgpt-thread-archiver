@@ -2,6 +2,12 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.9.1] — 2026-08-26
+
+### Fixed
+
+Fixed a syntax error in the exported offline interaction script that prevented Dark mode, Copy, branch navigation, and prompt-rail controls from initializing. Added regression coverage that compiles the generated inline script before release.
+
 ## [0.9.0] — candidate
 
 ### Added

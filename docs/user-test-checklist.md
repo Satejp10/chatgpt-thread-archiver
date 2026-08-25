@@ -27,7 +27,7 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Light appearance | Open the file on a device using a dark OS theme | The archive remains light and its controls/scrollbars do not switch to a mismatched dark scheme |
 | Line spacing | Export content with several paragraphs and explicit line breaks | Each line/paragraph has normal spacing; no doubled blank gaps appear |
 | Code blocks | Export fenced code with multiple lines | Code preserves its whitespace, remains dark/styled, and scrolls horizontally when needed |
-| Provenance | Inspect the HTML head and footer | Generator metadata and footer identify `chatgpt-thread-archiver 0.9.0` |
+| Provenance | Inspect the HTML head and footer | Generator metadata and footer identify `chatgpt-thread-archiver 0.9.1` |
 | Activation scope | Visit ChatGPT `/c/...`, ChatGPT `/s/...`, ChatGPT `/g/...`, Claude `/chat/...`, and unrelated pages such as settings, projects, or `/new` | The control appears only on the supported conversation routes and does not inject elsewhere; a generic Projects page without a specific conversation does not produce a misleading export control state |
 | Claude text export | Export a Claude conversation containing paragraphs, Markdown, explicit line breaks, and fenced code | An offline HTML file downloads with readable text, timestamps, speaker labels, and preserved code formatting |
 | Claude model | Export a Claude conversation whose API response includes a model name | The HTML header shows the model name without exposing cookies or raw response data |

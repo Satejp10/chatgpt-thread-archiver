@@ -182,41 +182,85 @@ function normalizeClaudeMessage(message, index) {
   };
 }
 
-function orderedClaudeMessages(raw) {
-  const all = Array.isArray(raw?.chat_messages) ? raw.chat_messages : [];
-  if (all.length === 0) throw new ClaudeClientError('shape', 'Claude returned no conversation messages.');
-  const byId = new Map(all.map((message) => [String(message?.uuid ?? message?.id ?? ''), message]));
-  const leafId = String(raw?.current_leaf_message_uuid ?? '');
+function claudeMessageId(message) {
+  return String(message?.uuid ?? message?.id ?? '');
+}
+
+function claudePathToLeaf(byId, leafId) {
   const path = [];
   const seen = new Set();
   let current = leafId && byId.has(leafId) ? byId.get(leafId) : null;
-  while (current && !seen.has(String(current?.uuid ?? current?.id ?? ''))) {
-    seen.add(String(current?.uuid ?? current?.id ?? ''));
+  while (current && !seen.has(claudeMessageId(current))) {
+    seen.add(claudeMessageId(current));
     path.push(current);
     const parentId = String(current?.parent_message_uuid ?? current?.parent ?? '');
     current = parentId ? byId.get(parentId) : null;
   }
-  if (path.length > 0) return { messages: path.reverse(), activeBranch: true };
-  return {
-    messages: [...all].sort((left, right) => Number(left?.index ?? 0) - Number(right?.index ?? 0)),
-    activeBranch: false,
-  };
+  return path.reverse();
+}
+
+function orderedClaudeMessages(raw) {
+  const all = Array.isArray(raw?.chat_messages) ? raw.chat_messages : [];
+  if (all.length === 0) throw new ClaudeClientError('shape', 'Claude returned no conversation messages.');
+  const byId = new Map(all.map((message) => [claudeMessageId(message), message]));
+  const currentLeaf = String(raw?.current_leaf_message_uuid ?? '');
+  const children = new Set(all.map((message) => String(message?.parent_message_uuid ?? message?.parent ?? '')).filter(Boolean));
+  const leaves = all.filter((message) => !children.has(claudeMessageId(message)));
+  const orderedLeafIds = [currentLeaf, ...leaves.map(claudeMessageId).filter((id) => id !== currentLeaf)].filter(Boolean);
+  const branchPaths = [];
+  const seenPaths = new Set();
+  for (const leafId of orderedLeafIds) {
+    const path = claudePathToLeaf(byId, leafId);
+    const key = path.map(claudeMessageId).join('\\u0000');
+    if (!path.length || seenPaths.has(key)) continue;
+    seenPaths.add(key);
+    branchPaths.push(path);
+  }
+  if (branchPaths.length > 0) return { messages: branchPaths[0], branchPaths, activeBranch: Boolean(currentLeaf && byId.has(currentLeaf)) };
+  const fallback = [...all].sort((left, right) => Number(left?.index ?? 0) - Number(right?.index ?? 0));
+  return { messages: fallback, branchPaths: [fallback], activeBranch: false };
 }
 
 export function normalizeClaudeConversation(raw, conversationId = null) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new ClaudeClientError('shape', 'Claude returned an invalid conversation object.');
   const ordered = orderedClaudeMessages(raw);
-  const messages = ordered.messages.map(normalizeClaudeMessage);
-  const uniqueMessages = [];
-  const seen = new Set();
-  for (const message of messages) {
-    if (seen.has(message.id)) continue;
-    seen.add(message.id);
-    uniqueMessages.push(message);
-  }
-  const omittedBlockCount = uniqueMessages.reduce((sum, message) => sum + message.omittedCount, 0);
-  const duplicateMessageCount = Math.max(0, messages.length - uniqueMessages.length);
-  const hiddenMessageCount = uniqueMessages.filter((message) => message.hidden).length;
+  const normalizePath = (path) => {
+    const normalized = path.map(normalizeClaudeMessage);
+    const unique = [];
+    const seen = new Set();
+    for (const message of normalized) {
+      if (seen.has(message.id)) continue;
+      seen.add(message.id);
+      unique.push(message);
+    }
+    return unique;
+  };
+  const messages = normalizePath(ordered.messages);
+  const branches = ordered.branchPaths.map((path, index) => {
+    const branchMessages = normalizePath(path);
+    const sourceNodeCount = path.length;
+    return {
+      index,
+      leafId: claudeMessageId(path.at(-1)),
+      active: index === 0,
+      messages: branchMessages,
+      stats: {
+        messageCount: branchMessages.length,
+        omittedBlockCount: branchMessages.reduce((sum, message) => sum + message.omittedCount, 0),
+        sourceNodeCount,
+        droppedNodeCount: Math.max(0, sourceNodeCount - branchMessages.length),
+        duplicateMessageCount: Math.max(0, sourceNodeCount - branchMessages.length),
+        hiddenMessageCount: branchMessages.filter((message) => message.hidden).length,
+        imageCount: 0,
+        imageEmbeddedCount: 0,
+        imageExcludedCount: 0,
+        imageUnavailableCount: 0,
+        imageBytes: 0,
+        imageBudgetLimitedCount: 0,
+      },
+    };
+  });
+  const uniqueMessages = messages;
   const allCount = Array.isArray(raw.chat_messages) ? raw.chat_messages.length : uniqueMessages.length;
   return {
     title: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : (typeof raw.title === 'string' && raw.title.trim() ? raw.title.trim() : 'Claude conversation'),
@@ -225,16 +269,20 @@ export function normalizeClaudeConversation(raw, conversationId = null) {
     provider: 'Claude',
     sourceShape: 'claude-message-tree',
     activeBranch: ordered.activeBranch,
+    activeBranchIndex: 0,
+    branches: branches.length > 1 ? branches : [],
     messages: uniqueMessages,
     stats: {
+      ...branches[0]?.stats,
       messageCount: uniqueMessages.length,
-      omittedBlockCount,
       sourceNodeCount: allCount,
       droppedNodeCount: ordered.activeBranch ? Math.max(0, allCount - ordered.messages.length) : 0,
-      duplicateMessageCount,
-      hiddenMessageCount,
+      duplicateMessageCount: branches[0]?.stats?.duplicateMessageCount ?? 0,
+      hiddenMessageCount: uniqueMessages.filter((message) => message.hidden).length,
+      branchCount: branches.length,
       imageCount: 0,
       imageEmbeddedCount: 0,
+      imageExcludedCount: 0,
       imageUnavailableCount: 0,
       imageBytes: 0,
       imageBudgetLimitedCount: 0,

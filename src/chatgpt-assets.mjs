@@ -197,13 +197,14 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
   return asAssetResult('unavailable', lastReason, { fileId });
 }
 
-export async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null, includeImages = true, selectedImageIndices = null } = {}) {
+export async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null, includeImages = true, selectedImageIndices = null, imageIndexOffset = 0 } = {}) {
   if (!conversation || !Array.isArray(conversation.messages)) return conversation;
   const imageBlocks = conversation.messages.flatMap((message) => (message.textBlocks ?? []).filter((block) => block.type === 'image').map((block) => ({ block, postId: message.id })));
   if (imageBlocks.length === 0) return { ...conversation, stats: { ...conversation.stats, imageCount: 0, imageEmbeddedCount: 0, imageExcludedCount: 0, imageUnavailableCount: 0, imageBytes: 0, imageBudgetLimitedCount: 0 } };
 
   const selected = selectedImageIndices === null ? null : new Set(selectedImageIndices);
-  const shouldInclude = (index) => Boolean(includeImages) && (selected === null || selected.has(index));
+  const safeImageIndexOffset = Number.isInteger(imageIndexOffset) && imageIndexOffset >= 0 ? imageIndexOffset : 0;
+  const shouldInclude = (index) => Boolean(includeImages) && (selected === null || selected.has(index + safeImageIndexOffset));
   const shouldResolveAny = Boolean(includeImages) && (selected === null || selected.size > 0);
   const auth = shouldResolveAny ? (authContext ?? await getAuthContext(fetchImpl)) : null;
   const cache = new Map();

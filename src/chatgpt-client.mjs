@@ -23,7 +23,20 @@ export function parseConversationRoute(url = globalThis.location?.href ?? '') {
   try {
     const parsed = new URL(url);
     const parts = parsed.pathname.split('/').filter(Boolean);
-    const routeIndex = parts.findIndex((part) => part === 'c' || part === 'conversation');
+    if (parts[0] === 'g') {
+      if (parts[2] !== 'c') {
+        return { kind: 'project', conversationId: null, pathname: parsed.pathname, routeSegment: 'g', reason: 'Projects route has no specific conversation path' };
+      }
+      const rawId = parts[3];
+      if (!rawId) return { kind: 'missing-id', conversationId: null, pathname: parsed.pathname, routeSegment: 'g', reason: 'Project conversation route has no conversation ID' };
+      return {
+        kind: 'conversation',
+        conversationId: decodeURIComponent(rawId),
+        pathname: parsed.pathname,
+        routeSegment: 'g',
+      };
+    }
+    const routeIndex = parts.findIndex((part) => part === 'c' || part === 's' || part === 'conversation');
     if (routeIndex >= 0) {
       const rawId = parts[routeIndex + 1];
       if (!rawId) return { kind: 'missing-id', conversationId: null, pathname: parsed.pathname, reason: 'conversation route has no ID' };
@@ -54,7 +67,7 @@ export function isChatGPTHost(locationLike = globalThis.location) {
 export function isExporterRoute(url = globalThis.location?.href ?? '') {
   try {
     const parsed = new URL(url);
-    return parsed.hostname === 'chatgpt.com' && /^\/(?:c|s)\/.+/.test(parsed.pathname);
+    return parsed.hostname === 'chatgpt.com' && parseConversationRoute(url).kind === 'conversation';
   } catch {
     return false;
   }
@@ -410,7 +423,24 @@ function redactRoutePath(route) {
   const pathname = String(route?.pathname ?? '');
   if (!pathname) return '<unknown-path>';
   const parts = pathname.split('/');
-  const routeIndex = parts.findIndex((part) => part === 'c' || part === 'conversation' || part === 'share');
+  if (parts[1] === 'g') {
+    if (parts[2]) {
+      let projectId = parts[2];
+      try { projectId = decodeURIComponent(projectId); } catch {
+        projectId = '';
+      }
+      parts[2] = redactId(projectId);
+    }
+    if (parts[3] === 'c' && parts[4]) {
+      let conversationId = parts[4];
+      try { conversationId = decodeURIComponent(conversationId); } catch {
+        conversationId = '';
+      }
+      parts[4] = redactId(conversationId);
+    }
+    return parts.join('/');
+  }
+  const routeIndex = parts.findIndex((part) => part === 'c' || part === 's' || part === 'conversation' || part === 'share');
   if (routeIndex >= 0 && parts[routeIndex + 1]) {
     let decoded = parts[routeIndex + 1];
     try { decoded = decodeURIComponent(decoded); } catch {

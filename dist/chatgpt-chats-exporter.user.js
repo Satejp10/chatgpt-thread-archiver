@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.9.1
+// @version      0.10.0
 // @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, image controls, and safe local statistics.
 // @match        https://chatgpt.com/c/*
 // @match        https://chatgpt.com/s/*
@@ -13,7 +13,7 @@
 
 (() => {
 'use strict';
-const ARCHIVER_VERSION = '0.9.1';
+const ARCHIVER_VERSION = '0.10.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -374,6 +374,42 @@ function uniqueNormalizedMessages(messages) {
   return unique;
 }
 
+function branchTreeFromBranches(branches) {
+  const records = Array.isArray(branches) ? branches : [];
+  const byId = new Map();
+  const order = [];
+  for (const branch of records) {
+    for (const message of Array.isArray(branch?.messages) ? branch.messages : []) {
+      const id = String(message?.id ?? '');
+      if (!id || byId.has(id)) continue;
+      byId.set(id, { message, children: [] });
+      order.push(id);
+    }
+  }
+  const childIds = new Set();
+  for (const id of order) {
+    const node = byId.get(id);
+    const parentId = String(node?.message?.parentId ?? '');
+    if (!parentId || !byId.has(parentId) || parentId === id) continue;
+    const parent = byId.get(parentId);
+    if (!parent.children.some((child) => child.message.id === id)) parent.children.push(node);
+    childIds.add(id);
+  }
+  const roots = order.filter((id) => !childIds.has(id)).map((id) => byId.get(id));
+  return roots.length > 0 ? roots : order.slice(0, 1).map((id) => byId.get(id));
+}
+
+function messagesFromBranchTree(tree) {
+  const messages = [];
+  const visit = (node) => {
+    if (!node?.message) return;
+    messages.push(node.message);
+    for (const child of node.children ?? []) visit(child);
+  };
+  for (const root of Array.isArray(tree) ? tree : []) visit(root);
+  return messages;
+}
+
 function statsForBranch(nodes, messages) {
   const structuralNodeCount = nodes.filter((node) => !(Object.prototype.hasOwnProperty.call(node, 'message') && !node.message)).length;
   return {
@@ -461,6 +497,7 @@ function normalizeConversation(raw) {
     activeBranch,
     activeBranchIndex: 0,
     branches: branchCount > 1 ? branches : [],
+    branchTree: branchCount > 1 ? branchTreeFromBranches(branches) : [],
     messages: uniqueMessages,
     stats: { ...baseStats, branchCount },
   };
@@ -658,7 +695,13 @@ header.export-head { margin-bottom: 24px; }
 .branch-nav { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 10px 0 0; }
 .branch-nav button { min-width: 34px; padding: 4px 9px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px; cursor: pointer; font-size: 18px; line-height: 1; }
 .branch-nav button:disabled { opacity: .4; cursor: default; }
-.branch-nav span { color: var(--muted); font-size: .85em; }
+	.branch-nav span { color: var(--muted); font-size: .85em; }
+	.branch-option[hidden] { display: none; }
+	.branch-fork { margin: 0 0 20px; }
+	.branch-choice { display: flex; align-items: center; justify-content: center; gap: 10px; margin: -8px 0 20px; }
+	.branch-choice button { min-width: 30px; padding: 2px 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px; cursor: pointer; font-size: 18px; line-height: 1; }
+	.branch-choice button:disabled { opacity: .4; cursor: default; }
+	.branch-choice span { color: var(--muted); font-size: .85em; min-width: 30px; text-align: center; }
 #rail { max-width: 820px; margin: 0 auto 24px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
 #rail h2 { margin: 0 0 8px; color: var(--muted); font-size: .9rem; }
 #rail ol { margin: 0; padding-left: 1.4em; font-size: .9rem; }
@@ -707,6 +750,12 @@ const EXPORT_JS = [
   '  var branchNav = document.getElementById("branch-nav"), branchViews = document.querySelectorAll(".branch-view"), branchPosition = document.getElementById("branch-position"), branchPrev = document.getElementById("branch-prev"), branchNext = document.getElementById("branch-next"), branchCurrent = 0;',
   '  function showBranch(index) { if (!branchViews.length) return; branchCurrent = Math.max(0, Math.min(index, branchViews.length - 1)); for (var b = 0; b < branchViews.length; b++) branchViews[b].hidden = b !== branchCurrent; if (branchPosition) branchPosition.textContent = "Branch " + (branchCurrent + 1) + "/" + branchViews.length; if (branchPrev) branchPrev.disabled = branchCurrent === 0; if (branchNext) branchNext.disabled = branchCurrent === branchViews.length - 1; }',
   '  if (branchNav && branchViews.length > 1) { branchPrev.addEventListener("click", function () { showBranch(branchCurrent - 1); }); branchNext.addEventListener("click", function () { showBranch(branchCurrent + 1); }); showBranch(0); }',
+  '  var localForks = document.querySelectorAll(".branch-fork");',
+  '  for (var f = 0; f < localForks.length; f++) (function (fork) {',
+  '    var options = fork.querySelectorAll(":scope > .branch-option"), choice = fork.querySelector(":scope > .branch-choice"), position = choice && choice.querySelector("[data-branch-position]"), prev = choice && choice.querySelector("[data-branch-prev]"), next = choice && choice.querySelector("[data-branch-next]"), current = choice ? Number(choice.getAttribute("data-active-index")) || 0 : 0;',
+  '    function showLocal(index) { if (!options.length) return; current = Math.max(0, Math.min(index, options.length - 1)); for (var o = 0; o < options.length; o++) options[o].hidden = o !== current; if (position) position.textContent = (current + 1) + "/" + options.length; if (prev) prev.disabled = current === 0; if (next) next.disabled = current === options.length - 1; }',
+  '    if (options.length > 1) { if (prev) prev.addEventListener("click", function () { showLocal(current - 1); }); if (next) next.addEventListener("click", function () { showLocal(current + 1); }); showLocal(current); }',
+  '  })(localForks[f]);',
   '  var rail = document.getElementById("rail"), toggle = document.getElementById("rail-toggle");',
   '  if (!rail) return;',
   '  function setHidden(hidden) { rail.className = hidden ? "hidden" : ""; if (toggle) { toggle.textContent = hidden ? "Nav" : "Hide"; toggle.setAttribute("aria-expanded", hidden ? "false" : "true"); } try { sessionStorage.setItem("chatgpt-thread-archiver-rail-hidden", hidden ? "1" : "0"); } catch (e) {} }',
@@ -730,50 +779,81 @@ const EXPORT_JS = [
   '})();',
 ].join('\n');
 
+function renderMessageArticle(message, id, messageIndex, includeMessageModels, railItems, branchLabel = '') {
+  const timestamp = formatTimestamp(message.createdAt);
+  const timestampValue = timestampIso(message.createdAt);
+  const blocks = message.textBlocks.map(renderBlock).join('') || '<p class="empty-message">[empty message]</p>';
+  const copyButton = '<button class="copy-btn" type="button">Copy</button>';
+  if (message.role === 'user') {
+    railItems.push(`<li><a href="#${id}"><span>${escapeHtml(branchLabel + railLabel(messagePlainText(message)))}</span></a></li>`);
+  }
+  const hiddenClass = message.hidden ? ' message-hidden' : '';
+  const datetime = timestampValue ? ` datetime="${escapeAttribute(timestampValue)}"` : '';
+  return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}${hiddenClass}" id="${id}" data-message-index="${messageIndex}" data-message-id="${escapeAttribute(message.id)}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${messageModelLine(message, includeMessageModels)}${timestamp ? `<span class="msg-time"><time${datetime}>${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
+}
+
 function renderMessageList(messages, branchIndex, branchCount, includeMessageModels, railItems) {
   return messages.map((message, index) => {
     const id = branchCount > 1
       ? `m-b${String(branchIndex + 1).padStart(2, '0')}-${String(index + 1).padStart(4, '0')}`
       : `m-${String(index + 1).padStart(4, '0')}`;
-    const timestamp = formatTimestamp(message.createdAt);
-    const timestampValue = timestampIso(message.createdAt);
-    const blocks = message.textBlocks.map(renderBlock).join('') || '<p class="empty-message">[empty message]</p>';
-    const copyButton = '<button class="copy-btn" type="button">Copy</button>';
-    if (message.role === 'user') {
-      const branchPrefix = branchCount > 1 ? `Branch ${branchIndex + 1} · ` : '';
-      railItems.push(`<li><a href="#${id}"><span>${escapeHtml(branchPrefix + railLabel(messagePlainText(message)))}</span></a></li>`);
-    }
-    const hiddenClass = message.hidden ? ' message-hidden' : '';
-    const datetime = timestampValue ? ` datetime="${escapeAttribute(timestampValue)}"` : '';
-    return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}${hiddenClass}" id="${id}" data-message-index="${index + 1}" data-message-id="${escapeAttribute(message.id)}" data-branch-index="${branchIndex}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${messageModelLine(message, includeMessageModels)}${timestamp ? `<span class="msg-time"><time${datetime}>${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
+    const branchPrefix = branchCount > 1 ? `Branch ${branchIndex + 1} · ` : '';
+    return renderMessageArticle(message, id, index + 1, includeMessageModels, railItems, branchPrefix);
   }).join('\n');
+}
+
+function renderBranchTree(tree, activeIds, includeMessageModels, railItems) {
+  const state = { messageIndex: 0, forkIndex: 0 };
+  const containsActive = (node) => Boolean(node && (activeIds.has(node.message.id) || node.children.some(containsActive)));
+  const renderNode = (node) => {
+    const id = `m-tree-${String(++state.messageIndex).padStart(4, '0')}`;
+    const article = renderMessageArticle(node.message, id, state.messageIndex, includeMessageModels, railItems);
+    if (!Array.isArray(node.children) || node.children.length <= 1) {
+      return `${article}${node.children?.[0] ? renderNode(node.children[0]) : ''}`;
+    }
+    const forkId = `fork-${String(++state.forkIndex).padStart(3, '0')}`;
+    let activeIndex = node.children.findIndex(containsActive);
+    if (activeIndex < 0) activeIndex = 0;
+    const options = node.children.map((child, index) => `<div class="branch-option" data-fork-id="${forkId}" data-branch-index="${index}"${index === activeIndex ? ' data-active="true"' : ''}>${renderNode(child)}</div>`).join('');
+    const controls = `<div class="branch-choice" data-fork-id="${forkId}" data-active-index="${activeIndex}" role="group" aria-label="Conversation alternatives"><button type="button" data-branch-prev aria-label="Previous alternative">‹</button><span data-branch-position>${activeIndex + 1}/${node.children.length}</span><button type="button" data-branch-next aria-label="Next alternative">›</button></div>`;
+    return `${article}<div class="branch-fork" data-fork-id="${forkId}">${options}${controls}</div>`;
+  };
+  return tree.map(renderNode).join('\n');
 }
 
 function renderConversationHtml(conversation, { exportedAt = new Date().toISOString(), sourceUrl = null, includeConversationId = false, includeTitle = true, includeMessageModels = true, includeAllBranches = false } = {}) {
   const provider = typeof conversation.provider === 'string' && conversation.provider.trim() ? conversation.provider.trim() : 'ChatGPT';
   const availableBranches = Array.isArray(conversation.branches) && conversation.branches.length > 1 ? conversation.branches : [];
-  const branchRecords = includeAllBranches && availableBranches.length > 1
+  const localTree = includeAllBranches && Array.isArray(conversation.branchTree) && conversation.branchTree.length > 0 ? conversation.branchTree : [];
+  const useLocalTree = localTree.length > 0;
+  const branchRecords = includeAllBranches && availableBranches.length > 1 && !useLocalTree
     ? availableBranches
     : [{ index: 0, messages: conversation.messages, active: true, stats: conversation.stats }];
   const branchCount = branchRecords.length;
   const availableBranchCount = availableBranches.length || (conversation.stats?.branchCount ?? 0);
   const railItems = [];
-  const renderedMessages = branchRecords.flatMap((branch) => branch.messages ?? []);
-  const messagesHtml = branchRecords.map((branch, index) => `<div class="branch-view" data-branch-index="${index}">${renderMessageList(branch.messages, index, branchCount, includeMessageModels, railItems)}</div>`).join('\n');
-  const branchNavigator = branchCount > 1
+  const activeBranchMessages = availableBranches[conversation.activeBranchIndex ?? 0]?.messages ?? conversation.messages;
+  const activeIds = new Set((activeBranchMessages ?? []).map((message) => message.id));
+  const renderedMessages = useLocalTree ? messagesFromBranchTree(localTree) : branchRecords.flatMap((branch) => branch.messages ?? []);
+  const messagesHtml = useLocalTree
+    ? renderBranchTree(localTree, activeIds, includeMessageModels, railItems)
+    : branchRecords.map((branch, index) => `<div class="branch-view" data-branch-index="${index}">${renderMessageList(branch.messages, index, branchCount, includeMessageModels, railItems)}</div>`).join('\n');
+  const branchNavigator = !useLocalTree && branchCount > 1
     ? `<div id="branch-nav" class="branch-nav" role="group" aria-label="Conversation branches"><button id="branch-prev" type="button" aria-label="Previous branch">‹</button><span id="branch-position">Branch 1/${branchCount}</span><button id="branch-next" type="button" aria-label="Next branch">›</button></div>`
     : '';
-  const branchNote = branchCount > 1
-    ? `All ${provider} conversation branches exported.`
-    : conversation.activeBranch
-      ? (availableBranchCount > 1 ? `Active ${provider} conversation branch exported; ${availableBranchCount - 1} alternate branch${availableBranchCount === 2 ? '' : 'es'} available.` : `Active ${provider} conversation branch exported.`)
-      : `${provider} message array exported.`;
+  const branchNote = useLocalTree
+    ? `All ${provider} conversation branches exported with local fork controls.`
+    : branchCount > 1
+      ? `All ${provider} conversation branches exported.`
+      : conversation.activeBranch
+        ? (availableBranchCount > 1 ? `Active ${provider} conversation branch exported; ${availableBranchCount - 1} alternate branch${availableBranchCount === 2 ? '' : 'es'} available.` : `Active ${provider} conversation branch exported.`)
+        : `${provider} message array exported.`;
   const rawTitle = includeTitle ? conversation.title : `${provider} conversation`;
   const title = escapeHtml(rawTitle);
   const idMeta = includeConversationId && conversation.conversationId ? `<meta name="conversation-id" content="${escapeAttribute(conversation.conversationId)}">` : '';
   const sourceBlock = sourceUrl ? `<p class="meta">Source: <a href="${escapeAttribute(sourceUrl)}" rel="noopener noreferrer">${escapeHtml(sourceUrl)}</a></p>` : '';
   const metadata = `<p class="meta">Exported ${escapeHtml(exportedAt)} · ${renderedMessages.length} message${renderedMessages.length === 1 ? '' : 's'} (${escapeHtml(roleCounts(renderedMessages, provider))})</p>`;
-  const branchLine = availableBranchCount > 1 ? `<p class="meta">Branches: ${branchCount > 1 ? `${branchCount} exported` : `1 of ${availableBranchCount} exported`}</p>` : '';
+  const branchLine = availableBranchCount > 1 ? `<p class="meta">Branches: ${useLocalTree ? `${availableBranchCount} available; local fork controls shown` : branchCount > 1 ? `${branchCount} exported` : `1 of ${availableBranchCount} exported`}</p>` : '';
   const modelLine = formatModels(conversation);
   const statsLine = formatLocalStats(conversation.stats);
   const omissionLine = conversation.stats.omittedBlockCount > 0
@@ -1534,6 +1614,31 @@ function orderedClaudeMessages(raw) {
   return { messages: fallback, branchPaths: [fallback], activeBranch: false };
 }
 
+function claudeBranchTreeFromBranches(branches) {
+  const records = Array.isArray(branches) ? branches : [];
+  const byId = new Map();
+  const order = [];
+  for (const branch of records) {
+    for (const message of Array.isArray(branch?.messages) ? branch.messages : []) {
+      const id = String(message?.id ?? '');
+      if (!id || byId.has(id)) continue;
+      byId.set(id, { message, children: [] });
+      order.push(id);
+    }
+  }
+  const childIds = new Set();
+  for (const id of order) {
+    const node = byId.get(id);
+    const parentId = String(node?.message?.parentId ?? '');
+    if (!parentId || !byId.has(parentId) || parentId === id) continue;
+    const parent = byId.get(parentId);
+    if (!parent.children.some((child) => child.message.id === id)) parent.children.push(node);
+    childIds.add(id);
+  }
+  const roots = order.filter((id) => !childIds.has(id)).map((id) => byId.get(id));
+  return roots.length > 0 ? roots : order.slice(0, 1).map((id) => byId.get(id));
+}
+
 function normalizeClaudeConversation(raw, conversationId = null) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new ClaudeClientError('shape', 'Claude returned an invalid conversation object.');
   const ordered = orderedClaudeMessages(raw);
@@ -1584,6 +1689,7 @@ function normalizeClaudeConversation(raw, conversationId = null) {
     activeBranch: ordered.activeBranch,
     activeBranchIndex: 0,
     branches: branches.length > 1 ? branches : [],
+    branchTree: branches.length > 1 ? claudeBranchTreeFromBranches(branches) : [],
     messages: uniqueMessages,
     stats: {
       ...branches[0]?.stats,
@@ -2280,11 +2386,14 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
     const allMessages = resolvedBranches.flatMap((branch) => branch.messages);
     const imageStats = ['imageCount', 'imageEmbeddedCount', 'imageExcludedCount', 'imageUnavailableCount', 'imageBytes', 'imageBudgetLimitedCount']
       .reduce((summary, key) => ({ ...summary, [key]: resolvedBranches.reduce((sum, branch) => sum + Number(branch.stats?.[key] ?? 0), 0) }), {});
+    const branchTree = branchTreeFromBranches(resolvedBranches);
+    const displayedMessages = branchTree.length > 0 ? messagesFromBranchTree(branchTree) : (resolvedBranches[0]?.messages ?? conversation.messages);
     return {
       ...conversation,
       messages: resolvedBranches[0]?.messages ?? conversation.messages,
       branches: resolvedBranches,
-      stats: { ...conversation.stats, ...imageStats, messageCount: allMessages.length },
+      branchTree,
+      stats: { ...conversation.stats, ...imageStats, messageCount: displayedMessages.length },
     };
   }
 
@@ -2335,8 +2444,10 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
             selectedImageIndices,
             onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
           });
-      const statsMessages = includeAllBranches ? conversation.branches.flatMap((branch) => branch.messages) : conversation.messages;
-      const statsBase = includeAllBranches ? aggregateBranchStats(conversation) : conversation.stats;
+      const statsMessages = includeAllBranches
+        ? (conversation.branchTree?.length ? messagesFromBranchTree(conversation.branchTree) : conversation.branches.flatMap((branch) => branch.messages))
+        : conversation.messages;
+      const statsBase = conversation.stats;
       const exportStats = deriveExportStats(statsMessages, statsBase, { model: conversation.model });
       const exportableConversation = { ...conversation, stats: exportStats };
       const exportedAt = new Date().toISOString();

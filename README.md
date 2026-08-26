@@ -18,7 +18,7 @@ If you already have an older version installed, remove the old userscript entry 
 
 ## Use it
 
-Open a conversation, click **Export HTML**, choose the available privacy, image, and branch options, and save the generated HTML file. The default export follows the currently selected branch. You can optionally include edited prompts and regenerated responses; when included, the offline file provides local branch navigation. In the exported file, use the **Dark mode** button in the upper-left corner to switch themes; your choice is remembered for future exports. The export also includes formatted messages, prompt navigation, copy buttons, and safe local statistics. ChatGPT images are included on a best-effort basis, and basic Claude.ai text export is supported.
+Open a conversation, click **Export HTML**, choose the available privacy, image, and branch options, and save the generated HTML file. The default export follows the currently selected branch. You can optionally include edited prompts and regenerated responses; when included, the offline file provides compact local arrow controls at each branch point, with counters such as `1/2` and `2/2`. Separate fork points remain separate, so an edited prompt and a regenerated response below it can each be navigated independently. In the exported file, use the **Dark mode** button in the upper-left corner to switch themes; your choice is remembered for future exports. The export also includes formatted messages, prompt navigation, copy buttons, and safe local statistics. ChatGPT images are included on a best-effort basis, and basic Claude.ai text export is supported.
 
 ## Privacy
 
@@ -26,7 +26,7 @@ The script does not ask for your password, persist conversation content, or call
 
 ## Current limitations
 
-The script exports only the conversation currently open in the browser; bulk or all-chat export is not supported. Current-branch export remains the default, while all-branch export can produce substantially larger files and is limited to the branches exposed by the provider response. Provider web-app interfaces may change, and unsupported files or rich-content blocks may appear as omission markers instead of being fully rendered.
+The script exports only the conversation currently open in the browser; bulk or all-chat export is not supported. Current-branch export remains the default, while the optional all-branch export is limited to the forks exposed by the provider response. The message-level controls are an experimental approximation of the native ChatGPT experience; provider web-app interfaces and internal tree formats may change, and unsupported files or rich-content blocks may appear as omission markers instead of being fully rendered.
 
 ## Development
 

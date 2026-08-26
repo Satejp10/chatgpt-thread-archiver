@@ -1,14 +1,14 @@
 # Build and release history
 
-This document is the maintainer-facing build record for **ChatGPT Thread Archiver**. It is intentionally a concise, reproducible record rather than a raw terminal transcript. Raw logs can contain local paths, environment details, or accidental sensitive data; do not commit them.
+This document is the maintainer-facing build record for **ChatGPT Thread Archiver**. It is intentionally a concise, reproducible record rather than a raw terminal transcript. Raw logs can contain local paths, environment details, or accidental sensitive data; do not commit them. Detailed per-version records are maintained in [`docs/version-history/`](version-history/), following the workflow in [`docs/version-history/README.md`](version-history/README.md).
 
 ## Current stable state
 
 | Item | Value |
 |---|---|
 | Stable branch | `main` |
-| Current release | `v0.9.0` |
-| Latest stable merge commit | `aefd2e2` |
+| Current release | `v0.9.1` |
+| Latest stable merge commit | `7ab61eb` |
 | Canonical installable artifact | `dist/chatgpt-chats-exporter.user.js` |
 | Root convenience artifact | `chatgpt-chats-exporter.user.js` |
 | Artifact rule | Root and `dist/` userscripts must be byte-identical |
@@ -47,8 +47,9 @@ The current bundling order is important. `build.mjs` concatenates `src/core.mjs`
 
 | Release | Main purpose | Validation status | Release state |
 |---|---|---|---|
-| `v0.9.1` | Fix the exported offline interaction script so Dark mode, Copy, and navigation controls initialize | Local build/check pending final validation; live offline-control testing remains | Candidate on feature branch |
-| `v0.9.0` | ChatGPT Projects `/g/*` activation and optional all-branch export for edited prompts/regenerated responses | Local build/check completed; live Projects and branch testing remains | **Current stable release** |
+| `v0.10.0` | Experimental message-level local fork controls for edited prompts and regenerated responses, including nested fork points | Local build/check pending final validation; browser fixture validation passed; live provider testing remains | Candidate on feature branch |
+| `v0.9.1` | Fix the exported offline interaction script so Dark mode, Copy, and navigation controls initialize | Local build/check completed; live offline-control testing passed | **Current stable release** |
+| `v0.9.0` | ChatGPT Projects `/g/*` activation and optional all-branch export for edited prompts/regenerated responses | Local build/check completed; live Projects and branch testing remains | Historical |
 | `v0.8.1` | Optional per-message model labels with explicit unknown/not-found wording, plus dark-theme export toggle | Local build/check completed; live model-label/theme testing remains | Historical |
 | `v0.8.0` | Per-export ChatGPT image choices: include all, exclude all, or choose individual images | Local build/check completed; live image-choice testing remains | Historical |
 | `v0.7.0` | Expanded ChatGPT image recovery and safe local export statistics | Local build/check completed; live image testing remains | Historical |

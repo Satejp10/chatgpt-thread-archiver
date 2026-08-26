@@ -16,7 +16,7 @@ const [core, client, claude, assets, stats, ui] = await Promise.all([
 const banner = `// ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.9.1
+// @version      0.10.0
 // @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, image controls, and safe local statistics.
 // @match        https://chatgpt.com/c/*
 // @match        https://chatgpt.com/s/*

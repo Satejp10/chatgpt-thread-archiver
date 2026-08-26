@@ -4,7 +4,7 @@
 
 ChatGPT Thread Archiver is an independent browser userscript that exports the currently open ChatGPT or Claude.ai conversation to a self-contained offline HTML file. It uses the signed-in browser session and each provider’s same-origin internal web-app requests to retrieve structured conversation data. It does not use DOM scraping for message content and does not send exported conversations to a project server.
 
-The current stable release is **v0.9.0** on `main`; v0.9.1 is the current offline-controls bug-fix candidate on a feature branch. The canonical installable file is `dist/chatgpt-chats-exporter.user.js`; the root `chatgpt-chats-exporter.user.js` is a byte-identical convenience copy.
+The current stable release is **v0.9.1** on `main`; the next feature candidate is the message-level branch-controls experiment on a feature branch. Every new version must receive a record in `docs/version-history/` before its pull request is opened. The canonical installable file is `dist/chatgpt-chats-exporter.user.js`; the root `chatgpt-chats-exporter.user.js` is a byte-identical convenience copy.
 
 ## First steps for a new maintainer
 
@@ -26,8 +26,9 @@ Read these documents in this order:
 1. `README.md` for user-facing behavior and limitations.
 2. `docs/build-history.md` for reproducible build and release history.
 3. `docs/maintenance-notes.md` for boundaries that should not be casually changed.
-4. `docs/user-test-checklist.md` for live acceptance scenarios.
-5. `CHANGELOG.md` for version-by-version changes.
+4. `docs/version-history/README.md` for the required per-version release-record workflow, then the matching version record in that folder.
+5. `docs/user-test-checklist.md` for live acceptance scenarios.
+6. `CHANGELOG.md` for the user-facing version summary.
 
 ## Source ownership
 
@@ -35,7 +36,7 @@ Read these documents in this order:
 |---|---|---|
 | `src/chatgpt-client.mjs` | ChatGPT URL parsing, `/c/`, `/s/`, and `/g/` activation, session context, token cache, endpoint candidates, account/workspace headers, diagnostics | Keep requests same-origin and bounded. Never log credentials or full IDs. |
 | `src/claude-client.mjs` | Claude `/chat/` route parsing, organization cookie, conversation request, branch selection, text normalization, diagnostics | Keep Claude requests same-origin and bounded. v0.6 marks unsupported content instead of attempting rich rendering. |
-| `src/core.mjs` | Response normalization, active/all-branch traversal, content parsing, escaping, HTML generation, prompt rail, optional per-message model labels, offline branch navigation | Add a fixture before changing response handling. Keep conversation text out of generated script source; show `unknown / not found` rather than guessing a missing model. |
+| `src/core.mjs` | Response normalization, active/all-branch traversal, message-level fork-tree rendering, content parsing, escaping, HTML generation, prompt rail, optional per-message model labels, offline branch navigation | Add a fixture before changing response handling. Preserve parent/child relationships for edited prompts and regenerated replies; keep nested fork controls scoped to their own direct options. Keep conversation text out of generated script source; show `unknown / not found` rather than guessing a missing model. |
 | `src/chatgpt-assets.mjs` | Image pointer resolution, metadata fallbacks, same-origin URL allowlist, image limits, data-URL conversion | Preserve per-image and total limits, explicit fallbacks, deduplication, and no third-party fetches. Keep image-shape discovery in the normalizer and retrieval logic here. |
 | `src/export-stats.mjs` | Safe local word, character, text-block, role, and model statistics | Count only normalized text included in the export. Never call the provider for token, billing, or context-window data. |
 | `src/exporter-ui.js` | In-page controls, privacy options, image-choice and branch dialog, status messages, download, SPA reinsertion, mobile offsets | Keep image mode choices per-export except for the broad mode preference; branch mode may be remembered, but branch content must never be persisted. |

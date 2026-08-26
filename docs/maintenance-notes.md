@@ -22,6 +22,10 @@ The prompt rail is user-only, uses stable file-local message IDs, and has a no-J
 
 Privacy preferences store URL/title/conversation-ID booleans, the broad ChatGPT image mode, and the branch mode under `chatgpt-thread-archiver-prefs`. The old `chatgpt-chats-exporter-prefs` key is migrated once when it contains valid preferences; if migration cannot complete cleanly, the old key remains active. Disabled URL, title, and conversation-ID fields must be omitted entirely. The conversation ID is disabled by default. Individual image selections are per-export only and must never be persisted.
 
+## Version-history invariant
+
+Every version built from v0.10.0 onward must have one Markdown record in `docs/version-history/v<major>.<minor>.<patch>.md`. Create the record as a candidate before opening the pull request, include automated and live validation separately, and update it with the merge commit and stable status after merge. Follow `docs/version-history/README.md`; never place raw conversation data, browser logs, cookies, tokens, signed URLs, or full private identifiers in release records.
+
 ## Validation debt
 
 The local fixtures can validate deterministic parsing and rendering but cannot prove that ChatGPT’s or Claude.ai’s current session endpoint, auth/organization context, asset permissions, or response schema remain valid. Live browser acceptance is the user’s responsibility. When either live site changes, request a sanitized failure report containing only status, redacted paths, auth/organization-context booleans, and schema-safe diagnostics.

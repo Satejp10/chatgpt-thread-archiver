@@ -369,11 +369,14 @@
     const allMessages = resolvedBranches.flatMap((branch) => branch.messages);
     const imageStats = ['imageCount', 'imageEmbeddedCount', 'imageExcludedCount', 'imageUnavailableCount', 'imageBytes', 'imageBudgetLimitedCount']
       .reduce((summary, key) => ({ ...summary, [key]: resolvedBranches.reduce((sum, branch) => sum + Number(branch.stats?.[key] ?? 0), 0) }), {});
+    const branchTree = branchTreeFromBranches(resolvedBranches);
+    const displayedMessages = branchTree.length > 0 ? messagesFromBranchTree(branchTree) : (resolvedBranches[0]?.messages ?? conversation.messages);
     return {
       ...conversation,
       messages: resolvedBranches[0]?.messages ?? conversation.messages,
       branches: resolvedBranches,
-      stats: { ...conversation.stats, ...imageStats, messageCount: allMessages.length },
+      branchTree,
+      stats: { ...conversation.stats, ...imageStats, messageCount: displayedMessages.length },
     };
   }
 
@@ -424,8 +427,10 @@
             selectedImageIndices,
             onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
           });
-      const statsMessages = includeAllBranches ? conversation.branches.flatMap((branch) => branch.messages) : conversation.messages;
-      const statsBase = includeAllBranches ? aggregateBranchStats(conversation) : conversation.stats;
+      const statsMessages = includeAllBranches
+        ? (conversation.branchTree?.length ? messagesFromBranchTree(conversation.branchTree) : conversation.branches.flatMap((branch) => branch.messages))
+        : conversation.messages;
+      const statsBase = conversation.stats;
       const exportStats = deriveExportStats(statsMessages, statsBase, { model: conversation.model });
       const exportableConversation = { ...conversation, stats: exportStats };
       const exportedAt = new Date().toISOString();

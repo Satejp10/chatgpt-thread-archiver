@@ -1,0 +1,51 @@
+{
+  "title": "Nested branch test",
+  "conversation_id": "nested-branch-conversation-id",
+  "current_node": "a3",
+  "mapping": {
+    "root": { "id": "root", "parent": null, "children": ["u1"], "message": null },
+    "u1": {
+      "id": "u1",
+      "parent": "root",
+      "children": ["a1", "u2"],
+      "message": { "id": "u1", "author": { "role": "user" }, "content": { "parts": ["Original prompt"] } }
+    },
+    "a1": {
+      "id": "a1",
+      "parent": "u1",
+      "children": ["r1", "r2"],
+      "message": { "id": "a1", "author": { "role": "assistant" }, "content": { "parts": ["Original answer"] } }
+    },
+    "r1": {
+      "id": "r1",
+      "parent": "a1",
+      "children": [],
+      "message": { "id": "r1", "author": { "role": "assistant" }, "content": { "parts": ["Regenerated original answer one"] } }
+    },
+    "r2": {
+      "id": "r2",
+      "parent": "a1",
+      "children": [],
+      "message": { "id": "r2", "author": { "role": "assistant" }, "content": { "parts": ["Regenerated original answer two"] } }
+    },
+    "u2": {
+      "id": "u2",
+      "parent": "u1",
+      "children": ["a2", "a3"],
+      "message": { "id": "u2", "author": { "role": "user" }, "content": { "parts": ["Edited prompt"] } }
+    },
+    "a2": {
+      "id": "a2",
+      "parent": "u2",
+      "children": [],
+      "message": { "id": "a2", "author": { "role": "assistant" }, "content": { "parts": ["Edited answer one"] } }
+    },
+    "a3": {
+      "id": "a3",
+      "parent": "u2",
+      "children": [],
+      "message": { "id": "a3", "author": { "role": "assistant" }, "content": { "parts": ["Edited regenerated answer two"] }
+    }
+  }
+}
+}

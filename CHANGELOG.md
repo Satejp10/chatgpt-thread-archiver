@@ -2,6 +2,16 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.10.0] — candidate
+
+### Added
+
+Added experimental message-level branch controls for optional all-branch exports. Each fork point now receives its own local previous/next arrows and a position counter, so edited prompts and regenerated responses can be navigated independently, including nested combinations.
+
+The renderer preserves the current-branch default, keeps the export self-contained and offline, and retains a readable no-JavaScript fallback. The branch tree is built from the provider response already retrieved for the open conversation; no additional history scan or third-party request is introduced.
+
+Live testing remains required for ChatGPT edited prompts, regenerated responses, nested forks, and Claude.ai branch shapes because provider tree formats are undocumented.
+
 ## [0.9.1] — 2026-08-26
 
 ### Fixed

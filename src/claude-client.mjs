@@ -221,6 +221,31 @@ function orderedClaudeMessages(raw) {
   return { messages: fallback, branchPaths: [fallback], activeBranch: false };
 }
 
+function claudeBranchTreeFromBranches(branches) {
+  const records = Array.isArray(branches) ? branches : [];
+  const byId = new Map();
+  const order = [];
+  for (const branch of records) {
+    for (const message of Array.isArray(branch?.messages) ? branch.messages : []) {
+      const id = String(message?.id ?? '');
+      if (!id || byId.has(id)) continue;
+      byId.set(id, { message, children: [] });
+      order.push(id);
+    }
+  }
+  const childIds = new Set();
+  for (const id of order) {
+    const node = byId.get(id);
+    const parentId = String(node?.message?.parentId ?? '');
+    if (!parentId || !byId.has(parentId) || parentId === id) continue;
+    const parent = byId.get(parentId);
+    if (!parent.children.some((child) => child.message.id === id)) parent.children.push(node);
+    childIds.add(id);
+  }
+  const roots = order.filter((id) => !childIds.has(id)).map((id) => byId.get(id));
+  return roots.length > 0 ? roots : order.slice(0, 1).map((id) => byId.get(id));
+}
+
 export function normalizeClaudeConversation(raw, conversationId = null) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new ClaudeClientError('shape', 'Claude returned an invalid conversation object.');
   const ordered = orderedClaudeMessages(raw);
@@ -271,6 +296,7 @@ export function normalizeClaudeConversation(raw, conversationId = null) {
     activeBranch: ordered.activeBranch,
     activeBranchIndex: 0,
     branches: branches.length > 1 ? branches : [],
+    branchTree: branches.length > 1 ? claudeBranchTreeFromBranches(branches) : [],
     messages: uniqueMessages,
     stats: {
       ...branches[0]?.stats,

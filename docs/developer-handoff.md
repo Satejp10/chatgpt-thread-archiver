@@ -4,7 +4,7 @@
 
 ChatGPT Thread Archiver is an independent browser userscript that exports the currently open ChatGPT or Claude.ai conversation to a self-contained offline HTML file. It uses the signed-in browser session and each provider’s same-origin internal web-app requests to retrieve structured conversation data. It does not use DOM scraping for message content and does not send exported conversations to a project server.
 
-The current stable release is **v0.8.1** on `main`; v0.9.0 is the current Projects-route and branch-aware export candidate on a feature branch. The canonical installable file is `dist/chatgpt-chats-exporter.user.js`; the root `chatgpt-chats-exporter.user.js` is a byte-identical convenience copy.
+The current stable release is **v0.9.0** on `main`; v0.9.1 is the current offline-controls bug-fix candidate on a feature branch. The canonical installable file is `dist/chatgpt-chats-exporter.user.js`; the root `chatgpt-chats-exporter.user.js` is a byte-identical convenience copy.
 
 ## First steps for a new maintainer
 

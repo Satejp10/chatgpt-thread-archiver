@@ -1,4 +1,4 @@
-const ARCHIVER_VERSION = '0.9.0';
+const ARCHIVER_VERSION = '0.9.1';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -697,7 +697,7 @@ const EXPORT_JS = [
   '  function setHidden(hidden) { rail.className = hidden ? "hidden" : ""; if (toggle) { toggle.textContent = hidden ? "Nav" : "Hide"; toggle.setAttribute("aria-expanded", hidden ? "false" : "true"); } try { sessionStorage.setItem("chatgpt-thread-archiver-rail-hidden", hidden ? "1" : "0"); } catch (e) {} }',
   '  var stored = "0"; try { stored = sessionStorage.getItem("chatgpt-thread-archiver-rail-hidden") || "0"; } catch (e) {} setHidden(stored === "1");',
   '  if (toggle) toggle.addEventListener("click", function () { setHidden(rail.className !== "hidden"); });',
-  '  var links = rail.querySelectorAll("ol a[href^=\"#\"]"), items = [], tip = document.createElement("div");',
+  '  var links = rail.querySelectorAll(\'ol a[href^="#"]\'), items = [], tip = document.createElement("div");',
   '  tip.id = "rail-tip"; document.body.appendChild(tip);',
   '  for (var i = 0; i < links.length; i++) { var target = document.getElementById(links[i].getAttribute("href").slice(1)); if (target) items.push({ a: links[i], li: links[i].parentNode, el: target }); }',
   '  if (!items.length) return;',

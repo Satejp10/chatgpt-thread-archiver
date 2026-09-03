@@ -4,6 +4,12 @@ ChatGPT Thread Archiver is a browser userscript that exports the **currently ope
 
 It runs locally in your browser, uses your existing signed-in session, and does not upload your conversation to a third-party service.
 
+> **Latest version**
+>
+> [Install the latest userscript](https://raw.githubusercontent.com/Satejp10/chatgpt-thread-archiver/main/dist/chatgpt-chats-exporter.user.js) · [Download the latest published release](https://github.com/Satejp10/chatgpt-thread-archiver/releases/latest/download/chatgpt-chats-exporter.user.js)
+>
+> The install link follows the reviewed `main` artifact. The release-download link becomes active after the first GitHub Release and always follows the latest published version.
+
 ## Install
 
 ### Quick install with Tampermonkey or another userscript manager

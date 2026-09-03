@@ -14,6 +14,22 @@ Never place conversation transcripts, raw API responses, browser logs, cookies, 
 
 Before committing a version record, run the normal build and regression checks, verify that the root and `dist/` userscripts are byte-identical, and run `git diff --check`. A candidate record must clearly distinguish automated validation from product-owner live testing.
 
+## GitHub Release and download workflow
+
+The README contains two permanent actions. The reviewed `main` install link points to `https://raw.githubusercontent.com/Satejp10/chatgpt-thread-archiver/main/dist/chatgpt-chats-exporter.user.js`; the published-download link points to `https://github.com/Satejp10/chatgpt-thread-archiver/releases/latest/download/chatgpt-chats-exporter.user.js`.
+
+Do not publish a GitHub Release until the pull request is merged and the live acceptance scenarios in the version record are complete. Then create an annotated version tag and attach the canonical `dist/chatgpt-chats-exporter.user.js` artifact using the exact stable asset name:
+
+```bash
+git checkout main
+git pull --ff-only origin main
+git tag -a vX.Y.Z -m "ChatGPT Thread Archiver vX.Y.Z"
+git push origin vX.Y.Z
+gh release create vX.Y.Z dist/chatgpt-chats-exporter.user.js --title "vX.Y.Z" --notes-file docs/version-history/vX.Y.Z.md
+```
+
+The release asset is for one-click download; browsers and userscript managers must still ask the user to approve installation. After publishing, update the same version record with the release URL, tag, merge commit, and stable status. The README’s `releases/latest/download/` URL should never be changed to a version-specific URL.
+
 ## Record template
 
 ```markdown

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.10.0
-// @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, image controls, and safe local statistics.
+// @version      0.11.0
+// @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, image controls, optional image-model labels, and safe local statistics.
 // @match        https://chatgpt.com/c/*
 // @match        https://chatgpt.com/s/*
 // @match        https://chatgpt.com/g/*
@@ -13,7 +13,7 @@
 
 (() => {
 'use strict';
-const ARCHIVER_VERSION = '0.10.0';
+const ARCHIVER_VERSION = '0.11.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -229,6 +229,34 @@ function contentCandidates(message) {
   return candidates;
 }
 
+const IMAGE_MODEL_KEYS = ['image_model', 'imageModel', 'generation_model', 'generationModel'];
+const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{1,120}$/;
+
+function safeImageModelIdentifier(value) {
+  const candidate = String(value ?? '').trim();
+  return MODEL_ID_RE.test(candidate) ? candidate : null;
+}
+
+function imageModelFromValue(value, metadata = {}) {
+  const candidates = [value, metadata, metadata?.dalle, metadata?.generation, value?.image_generation, value?.generation];
+  for (const source of candidates) {
+    if (!isPlainObject(source)) continue;
+    for (const key of IMAGE_MODEL_KEYS) {
+      const model = safeImageModelIdentifier(source[key]);
+      if (model) return model;
+    }
+    const nestedModel = safeImageModelIdentifier(source.model);
+    if (nestedModel && (source === metadata?.dalle || source === metadata?.generation || source === value?.image_generation || source === value?.generation)) return nestedModel;
+  }
+  return null;
+}
+
+function discoverImageModelMetadata(value) {
+  const metadata = isPlainObject(value?.metadata) ? value.metadata : {};
+  const model = imageModelFromValue(value, metadata);
+  return { found: Boolean(model), model: model ?? 'unknown / not found' };
+}
+
 function normalizePart(candidate, depth = 0) {
   const { kind: candidateKind, value } = candidate;
   if (candidateKind === 'attachment') return { kind: 'omitted', reason: 'attachment or file content' };
@@ -241,6 +269,7 @@ function normalizePart(candidate, depth = 0) {
   const imageShape = type.includes('image') || Object.prototype.hasOwnProperty.call(value, 'asset_pointer') || Object.prototype.hasOwnProperty.call(value, 'image_url');
   if (pointer && imageShape) {
     const metadata = isPlainObject(value.metadata) ? value.metadata : {};
+    const generated = Boolean(metadata.dalle || metadata.generation || value.generated);
     return {
       kind: 'image',
       asset: {
@@ -249,7 +278,8 @@ function normalizePart(candidate, depth = 0) {
         sizeBytes: Number.isFinite(value.size_bytes) ? value.size_bytes : null,
         width: Number.isFinite(value.width) ? value.width : null,
         height: Number.isFinite(value.height) ? value.height : null,
-        generated: Boolean(metadata.dalle || metadata.generation || value.generated),
+        generated,
+        imageModel: generated ? imageModelFromValue(value, metadata) : null,
       },
     };
   }
@@ -565,7 +595,7 @@ function textToBlocks(text) {
   return blocks;
 }
 
-function renderBlock(block) {
+function renderBlock(block, includeMessageModels = true) {
   if (block.type === 'omitted') return `<p class="omitted">[non-text content omitted: ${escapeHtml(block.reason)}]</p>`;
   if (block.type === 'image') {
     const asset = block.asset ?? {};
@@ -573,8 +603,9 @@ function renderBlock(block) {
     if (asset.status === 'embedded' && typeof asset.dataUrl === 'string' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(asset.dataUrl)) {
       const dimensions = Number.isFinite(asset.width) && Number.isFinite(asset.height) ? ` width="${escapeAttribute(String(Math.min(asset.width, 10000)))}" height="${escapeAttribute(String(Math.min(asset.height, 10000)))}"` : '';
       const label = asset.generated ? 'Generated image' : 'Uploaded/reference image';
+      const modelLabel = asset.generated && includeMessageModels ? ` · Image model: ${escapeHtml(asset.imageModel || 'unknown / not found')}` : '';
       const size = Number.isFinite(asset.byteLength) ? ` · ${Math.round(asset.byteLength / 1024)} KB embedded` : '';
-      return `<figure class="image-block"><img src="${escapeAttribute(asset.dataUrl)}" alt="${label}"${dimensions} loading="lazy"><figcaption>${label}${size}</figcaption></figure>`;
+      return `<figure class="image-block"><img src="${escapeAttribute(asset.dataUrl)}" alt="${label}"${dimensions} loading="lazy"><figcaption>${label}${modelLabel}${size}</figcaption></figure>`;
     }
     return `<p class="omitted">[image unavailable: ${escapeHtml(asset.reason || 'asset expired or inaccessible')}]</p>`;
   }
@@ -782,7 +813,7 @@ const EXPORT_JS = [
 function renderMessageArticle(message, id, messageIndex, includeMessageModels, railItems, branchLabel = '') {
   const timestamp = formatTimestamp(message.createdAt);
   const timestampValue = timestampIso(message.createdAt);
-  const blocks = message.textBlocks.map(renderBlock).join('') || '<p class="empty-message">[empty message]</p>';
+  const blocks = message.textBlocks.map((block) => renderBlock(block, includeMessageModels)).join('') || '<p class="empty-message">[empty message]</p>';
   const copyButton = '<button class="copy-btn" type="button">Copy</button>';
   if (message.role === 'user') {
     railItems.push(`<li><a href="#${id}"><span>${escapeHtml(branchLabel + railLabel(messagePlainText(message)))}</span></a></li>`);
@@ -2210,6 +2241,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
             messageIndex: turnIndex,
             speaker: message.authorLabel ?? (message.role === 'user' ? 'You' : 'ChatGPT'),
             generated: Boolean(block.asset?.generated),
+            imageModel: block.asset?.imageModel || 'unknown / not found',
             sizeBytes: Number.isFinite(block.asset?.sizeBytes) ? block.asset.sizeBytes : null,
           });
         }
@@ -2245,7 +2277,8 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
       const inputs = [];
       for (const entry of entries) {
         const branchLabel = entries.some((candidate) => candidate.branchIndex !== entry.branchIndex) ? ` · branch ${entry.branchIndex + 1}` : '';
-        const image = checkbox(`cge-image-${entry.index}`, `Image ${entry.index + 1}${branchLabel} · message ${entry.messageIndex} · ${entry.speaker} · ${entry.generated ? 'generated' : 'uploaded/reference'} · ${formatImageSize(entry.sizeBytes)}`, true);
+        const modelLabel = entry.generated ? ` · ${entry.imageModel}` : '';
+        const image = checkbox(`cge-image-${entry.index}`, `Image ${entry.index + 1}${branchLabel} · message ${entry.messageIndex} · ${entry.speaker} · ${entry.generated ? 'generated' : 'uploaded/reference'}${modelLabel} · ${formatImageSize(entry.sizeBytes)}`, true);
         image.input.dataset.imageIndex = String(entry.index);
         inputs.push(image.input);
         fieldset.appendChild(image.wrapper);

@@ -193,6 +193,7 @@
             messageIndex: turnIndex,
             speaker: message.authorLabel ?? (message.role === 'user' ? 'You' : 'ChatGPT'),
             generated: Boolean(block.asset?.generated),
+            imageModel: block.asset?.imageModel || 'unknown / not found',
             sizeBytes: Number.isFinite(block.asset?.sizeBytes) ? block.asset.sizeBytes : null,
           });
         }
@@ -228,7 +229,8 @@
       const inputs = [];
       for (const entry of entries) {
         const branchLabel = entries.some((candidate) => candidate.branchIndex !== entry.branchIndex) ? ` · branch ${entry.branchIndex + 1}` : '';
-        const image = checkbox(`cge-image-${entry.index}`, `Image ${entry.index + 1}${branchLabel} · message ${entry.messageIndex} · ${entry.speaker} · ${entry.generated ? 'generated' : 'uploaded/reference'} · ${formatImageSize(entry.sizeBytes)}`, true);
+        const modelLabel = entry.generated ? ` · ${entry.imageModel}` : '';
+        const image = checkbox(`cge-image-${entry.index}`, `Image ${entry.index + 1}${branchLabel} · message ${entry.messageIndex} · ${entry.speaker} · ${entry.generated ? 'generated' : 'uploaded/reference'}${modelLabel} · ${formatImageSize(entry.sizeBytes)}`, true);
         image.input.dataset.imageIndex = String(entry.index);
         inputs.push(image.input);
         fieldset.appendChild(image.wrapper);

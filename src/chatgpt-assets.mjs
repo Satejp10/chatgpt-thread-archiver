@@ -1,12 +1,27 @@
-export const IMAGE_LIMITS = Object.freeze({ perImageBytes: 3 * 1024 * 1024, totalBytes: 12 * 1024 * 1024, embeddedImageCount: 64 });
-const MAX_IMAGE_BYTES = IMAGE_LIMITS.perImageBytes;
-const MAX_TOTAL_IMAGE_BYTES = IMAGE_LIMITS.totalBytes;
-const MAX_EMBEDDED_IMAGE_COUNT = IMAGE_LIMITS.embeddedImageCount;
+// No size or count budget is applied by default: what gets embedded is the
+// user's explicit selection in the image chooser, which shows each image's size
+// and a running total. A caller may still pass a finite `limits` object.
+export const IMAGE_LIMITS = Object.freeze({ perImageBytes: Infinity, totalBytes: Infinity, embeddedImageCount: Infinity });
+const RETRY_AFTER_MIN_MS = 1_000;
+const RETRY_AFTER_MAX_MS = 15_000;
+const RETRY_AFTER_DEFAULT_MS = 5_000;
+
+function describeByteLimit(bytes) {
+  return Number.isFinite(bytes) ? `${Math.round(bytes / (1024 * 1024))} MiB` : 'unlimited';
+}
+
+export function retryDelayMs(headerValue) {
+  const seconds = Number(String(headerValue ?? '').trim());
+  if (!Number.isFinite(seconds) || seconds <= 0) return RETRY_AFTER_DEFAULT_MS;
+  return Math.min(RETRY_AFTER_MAX_MS, Math.max(RETRY_AFTER_MIN_MS, Math.round(seconds * 1000)));
+}
+
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function applyImageBudget(result, { embeddedCount = 0, imageBytes = 0 } = {}, limits = IMAGE_LIMITS) {
   if (result?.status !== 'embedded') return result;
   if (embeddedCount >= limits.embeddedImageCount) return { status: 'unavailable', reason: `export exceeds the ${limits.embeddedImageCount} embedded-image limit`, budgetLimited: true };
-  if (imageBytes + (result.byteLength ?? 0) > limits.totalBytes) return { status: 'unavailable', reason: `export exceeds the ${Math.round(limits.totalBytes / (1024 * 1024))} MiB total embedded image budget`, budgetLimited: true };
+  if (imageBytes + (result.byteLength ?? 0) > limits.totalBytes) return { status: 'unavailable', reason: `export exceeds the ${describeByteLimit(limits.totalBytes)} total embedded image budget`, budgetLimited: true };
   return result;
 }
 const IMAGE_MIME_RE = /^image\/(?:png|jpe?g|webp|gif|avif|bmp|svg\+xml)$/i;
@@ -74,13 +89,13 @@ function asAssetResult(status, reason, extra = {}) {
   return { status, reason, ...extra };
 }
 
-function dataImageResult(pointer, remainingBytes = Infinity) {
+function dataImageResult(pointer, remainingBytes = Infinity, limits = IMAGE_LIMITS) {
   const value = String(pointer ?? '');
   const match = value.match(/^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/i);
   if (!match || !safeImageMime(match[1])) return null;
   const byteLength = Math.floor((match[2].length * 3) / 4) - (match[2].endsWith('==') ? 2 : match[2].endsWith('=') ? 1 : 0);
-  if (byteLength > MAX_IMAGE_BYTES) return asAssetResult('unavailable', 'image exceeds the 3 MB embedded size limit');
-  if (byteLength > remainingBytes) return asAssetResult('unavailable', 'image exceeds the 12 MiB total embedded image budget', { budgetLimited: true });
+  if (byteLength > limits.perImageBytes) return asAssetResult('unavailable', `image exceeds the ${describeByteLimit(limits.perImageBytes)} embedded size limit`);
+  if (byteLength > remainingBytes) return asAssetResult('unavailable', `image exceeds the ${describeByteLimit(limits.totalBytes)} total embedded image budget`, { budgetLimited: true });
   return asAssetResult('embedded', null, { dataUrl: value, mimeType: safeImageMime(match[1]), byteLength });
 }
 
@@ -117,6 +132,23 @@ export function candidateDownloadUrl(value) {
   return null;
 }
 
+// Exports are no longer capped, so a long run may be throttled part-way
+// through. Back off once on the provider's own terms rather than dropping an
+// image the user explicitly asked for. Covers both the metadata probe and the
+// byte fetch, since either can be the request that gets a 429.
+async function requestAsset(fetchImpl, url, headers, timeoutMs, sleep = defaultSleep) {
+  const send = () => fetchAssetWithTimeout(fetchImpl, url, {
+    method: 'GET',
+    credentials: 'same-origin',
+    headers,
+    cache: 'no-store',
+  }, timeoutMs);
+  const response = await send();
+  if (response.status !== 429) return response;
+  await sleep(retryDelayMs(response.headers.get('retry-after')));
+  return send();
+}
+
 function bytesToDataUrl(bytes, mime) {
   let binary = '';
   const chunkSize = 0x2000;
@@ -126,33 +158,30 @@ function bytesToDataUrl(bytes, mime) {
   return `data:${mime};base64,${btoa(binary)}`;
 }
 
-async function fetchImageBytes(fetchImpl, url, headers, timeoutMs, remainingBytes = Infinity) {
-  const response = await fetchAssetWithTimeout(fetchImpl, url, {
-    method: 'GET',
-    credentials: 'same-origin',
-    headers,
-    cache: 'no-store',
-  }, timeoutMs);
+async function fetchImageBytes(fetchImpl, url, headers, timeoutMs, remainingBytes = Infinity, limits = IMAGE_LIMITS, sleep = defaultSleep) {
+  const response = await requestAsset(fetchImpl, url, headers, timeoutMs, sleep);
   if (!response.ok) return asAssetResult('unavailable', `asset HTTP ${response.status}`);
   const contentType = safeImageMime(response.headers.get('content-type'));
   if (!contentType) return asAssetResult('unavailable', 'asset response was not a supported image');
   const declaredSize = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declaredSize) && declaredSize > MAX_IMAGE_BYTES) return asAssetResult('unavailable', 'image exceeds the 3 MB embedded size limit');
-  if (Number.isFinite(declaredSize) && declaredSize > remainingBytes) return asAssetResult('unavailable', 'image exceeds the 12 MiB total embedded image budget', { budgetLimited: true });
+  const tooLarge = `image exceeds the ${describeByteLimit(limits.perImageBytes)} embedded size limit`;
+  const overBudget = `image exceeds the ${describeByteLimit(limits.totalBytes)} total embedded image budget`;
+  if (Number.isFinite(declaredSize) && declaredSize > limits.perImageBytes) return asAssetResult('unavailable', tooLarge);
+  if (Number.isFinite(declaredSize) && declaredSize > remainingBytes) return asAssetResult('unavailable', overBudget, { budgetLimited: true });
   const buffer = await response.arrayBuffer();
-  if (buffer.byteLength > MAX_IMAGE_BYTES) return asAssetResult('unavailable', 'image exceeds the 3 MB embedded size limit');
-  if (buffer.byteLength > remainingBytes) return asAssetResult('unavailable', 'image exceeds the 12 MiB total embedded image budget', { budgetLimited: true });
+  if (buffer.byteLength > limits.perImageBytes) return asAssetResult('unavailable', tooLarge);
+  if (buffer.byteLength > remainingBytes) return asAssetResult('unavailable', overBudget, { budgetLimited: true });
   const bytes = new Uint8Array(buffer);
   return asAssetResult('embedded', null, { dataUrl: bytesToDataUrl(bytes, contentType), mimeType: contentType, byteLength: buffer.byteLength });
 }
 
-async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, timeoutMs, remainingBytes) {
+async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, timeoutMs, remainingBytes, limits = IMAGE_LIMITS, sleep = defaultSleep) {
   const pointer = String(asset?.pointer ?? '');
   if (!pointer) return asAssetResult('unavailable', 'image asset pointer is missing');
-  const embedded = dataImageResult(pointer, remainingBytes);
+  const embedded = dataImageResult(pointer, remainingBytes, limits);
   if (embedded) return embedded;
   const direct = allowedAssetUrl(pointer);
-  if (direct) return fetchImageBytes(fetchImpl, direct, auth.headers, timeoutMs, remainingBytes);
+  if (direct) return fetchImageBytes(fetchImpl, direct, auth.headers, timeoutMs, remainingBytes, limits, sleep);
 
   const fileId = assetFileId(pointer);
   if (!fileId) return asAssetResult('unavailable', 'no file identifier was found in the image asset pointer');
@@ -161,12 +190,7 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
   for (const path of candidates) {
     let response;
     try {
-      response = await fetchAssetWithTimeout(fetchImpl, new URL(path, currentAssetOrigin()).toString(), {
-        method: 'GET',
-        credentials: 'same-origin',
-        headers: auth.headers,
-        cache: 'no-store',
-      }, timeoutMs);
+      response = await requestAsset(fetchImpl, new URL(path, currentAssetOrigin()).toString(), auth.headers, timeoutMs, sleep);
     } catch (error) {
       lastReason = error?.code === 'timeout' ? 'asset request timed out' : 'asset request failed';
       continue;
@@ -178,7 +202,7 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
     }
     const directMime = safeImageMime(response.headers.get('content-type'));
     if (directMime) {
-      const result = await fetchImageBytes(fetchImpl, new URL(path, currentAssetOrigin()).toString(), auth.headers, timeoutMs, remainingBytes);
+      const result = await fetchImageBytes(fetchImpl, new URL(path, currentAssetOrigin()).toString(), auth.headers, timeoutMs, remainingBytes, limits, sleep);
       if (result.status === 'embedded' || result.budgetLimited) return result;
       lastReason = result.reason;
       continue;
@@ -189,7 +213,7 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
       lastReason = 'asset metadata had no approved same-origin estuary image URL';
       continue;
     }
-    const result = await fetchImageBytes(fetchImpl, downloadUrl, auth.headers, timeoutMs, remainingBytes);
+    const result = await fetchImageBytes(fetchImpl, downloadUrl, auth.headers, timeoutMs, remainingBytes, limits, sleep);
     if (result.status === 'embedded') return result;
     if (result.budgetLimited) return result;
     lastReason = result.reason;
@@ -197,7 +221,7 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
   return asAssetResult('unavailable', lastReason, { fileId });
 }
 
-export async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null, includeImages = true, selectedImageIndices = null, imageIndexOffset = 0 } = {}) {
+export async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null, includeImages = true, selectedImageIndices = null, imageIndexOffset = 0, sleep = defaultSleep } = {}) {
   if (!conversation || !Array.isArray(conversation.messages)) return conversation;
   const imageBlocks = conversation.messages.flatMap((message) => (message.textBlocks ?? []).filter((block) => block.type === 'image').map((block) => ({ block, postId: message.id })));
   if (imageBlocks.length === 0) return { ...conversation, stats: { ...conversation.stats, imageCount: 0, imageEmbeddedCount: 0, imageExcludedCount: 0, imageUnavailableCount: 0, imageBytes: 0, imageBudgetLimitedCount: 0 } };
@@ -226,8 +250,8 @@ export async function resolveConversationImages(conversation, { fetchImpl = glob
       if (!cache.has(pointer)) {
         const budgetExhausted = embeddedCount >= limits.embeddedImageCount || imageBytes >= limits.totalBytes;
         cache.set(pointer, budgetExhausted
-          ? asAssetResult('unavailable', embeddedCount >= limits.embeddedImageCount ? `export exceeds the ${limits.embeddedImageCount} embedded-image limit` : `export exceeds the ${Math.round(limits.totalBytes / (1024 * 1024))} MiB total embedded image budget`, { budgetLimited: true })
-          : await resolveOneImage(block.block.asset, conversationId, block.postId, auth, fetchImpl, timeoutMs, limits.totalBytes - imageBytes));
+          ? asAssetResult('unavailable', embeddedCount >= limits.embeddedImageCount ? `export exceeds the ${limits.embeddedImageCount} embedded-image limit` : `export exceeds the ${describeByteLimit(limits.totalBytes)} total embedded image budget`, { budgetLimited: true })
+          : await resolveOneImage(block.block.asset, conversationId, block.postId, auth, fetchImpl, timeoutMs, limits.totalBytes - imageBytes, limits, sleep));
       }
       result = cache.get(pointer) ?? asAssetResult('unavailable', 'image resolution did not run');
       const budgetedResult = applyImageBudget(result, { embeddedCount, imageBytes }, limits);

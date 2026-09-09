@@ -2,7 +2,23 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
-## [0.11.0] — candidate
+## [0.12.0] — candidate
+
+### Changed
+
+Removed the automatic image budget. Exports previously discarded any image over 3 MiB, stopped embedding after 12 MiB in total, and refused more than 64 images, so a conversation of ten generated images silently lost three of them. Nothing is capped now: what the export embeds is what you select.
+
+The image chooser is the control instead. It gains a `Select all` toggle that reflects a partial selection rather than lying about it, and a live readout of how many images are selected and how large they are, so an unwieldy export is visible before it is built.
+
+### Fixed
+
+A rate-limited image download is retried once, honouring `Retry-After`, instead of being dropped. Uncapped exports run longer and are likelier to be throttled part-way through.
+
+### Notes
+
+Live testing established that ChatGPT exposes no per-image model identifier, so the v0.11.0 image-model label always reads `unknown / not found`. The label is unchanged in this release pending a product decision. The assistant model recorded on the message is not the image model and is deliberately not used as a substitute.
+
+## [0.11.0]
 
 ### Added
 

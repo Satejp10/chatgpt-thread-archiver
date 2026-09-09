@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
 import { normalizeConversation, renderConversationHtml, sanitizeFilename, textToBlocks, ConversationShapeError, selectConversationBranch, messagesFromBranchTree, discoverImageModelMetadata } from './src/core.mjs';
 import { ChatGPTClientError, clearAccessTokenCache, describeClientError, endpointCandidates, getAuthContext, getConversationIdFromUrl, isExporterRoute, parseConversationRoute } from './src/chatgpt-client.mjs';
-import { applyImageBudget, candidateDownloadUrl, IMAGE_LIMITS, resolveConversationImages } from './src/chatgpt-assets.mjs';
+import { applyImageBudget, candidateDownloadUrl, IMAGE_LIMITS, resolveConversationImages, retryDelayMs } from './src/chatgpt-assets.mjs';
 import { deriveExportStats } from './src/export-stats.mjs';
 import { ClaudeClientError, claudeConversationPath, fetchClaudeConversation, getClaudeConversationIdFromUrl, isClaudeExporterRoute, normalizeClaudeConversation, parseClaudeConversationRoute } from './src/claude-client.mjs';
 
@@ -47,8 +47,8 @@ assert.match(simpleHtml, /class="copy-btn"/);
 assert.match(simpleHtml, /querySelector\("\.content"\)/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.11\.0"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.11\.0/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.12\.0"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.12\.0/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -179,11 +179,22 @@ assert.deepEqual(duplicateParts.messages[0].textBlocks.map((block) => block.text
 const literalEscapes = normalizeConversation({ title: 'Literal escapes', mapping: { root: { parent: null, children: ['literal'], message: null }, literal: { parent: 'root', children: [], message: { id: 'literal', author: { role: 'user' }, content: { parts: ['literal \\n \\t \\u0041 C:\\\\temp\\\\file regex \\d+'] } } } }, current_node: 'literal' });
 assert.equal(literalEscapes.messages[0].textBlocks[0].text, 'literal \\n \\t \\u0041 C:\\\\temp\\\\file regex \\d+');
 
-assert.deepEqual(IMAGE_LIMITS, { perImageBytes: 3 * 1024 * 1024, totalBytes: 12 * 1024 * 1024, embeddedImageCount: 64 });
+// The export applies no image budget by default: the chooser is the control.
+assert.deepEqual(IMAGE_LIMITS, { perImageBytes: Infinity, totalBytes: Infinity, embeddedImageCount: Infinity });
 const embeddedResult = { status: 'embedded', byteLength: 8, dataUrl: 'data:image/png;base64,AA==' };
-assert.equal(applyImageBudget(embeddedResult, { embeddedCount: 0, imageBytes: IMAGE_LIMITS.totalBytes - 8 }).status, 'embedded');
-assert.equal(applyImageBudget({ ...embeddedResult, byteLength: 9 }, { embeddedCount: 0, imageBytes: IMAGE_LIMITS.totalBytes - 8 }).reason, 'export exceeds the 12 MiB total embedded image budget');
-assert.equal(applyImageBudget(embeddedResult, { embeddedCount: IMAGE_LIMITS.embeddedImageCount, imageBytes: 0 }).reason, 'export exceeds the 64 embedded-image limit');
+assert.equal(applyImageBudget(embeddedResult, { embeddedCount: 4096, imageBytes: 5 * 1024 * 1024 * 1024 }).status, 'embedded');
+// A caller may still opt into a finite budget, and the messages follow it.
+const cappedLimits = { perImageBytes: 3 * 1024 * 1024, totalBytes: 12 * 1024 * 1024, embeddedImageCount: 64 };
+assert.equal(applyImageBudget(embeddedResult, { embeddedCount: 0, imageBytes: cappedLimits.totalBytes - 8 }, cappedLimits).status, 'embedded');
+assert.equal(applyImageBudget({ ...embeddedResult, byteLength: 9 }, { embeddedCount: 0, imageBytes: cappedLimits.totalBytes - 8 }, cappedLimits).reason, 'export exceeds the 12 MiB total embedded image budget');
+assert.equal(applyImageBudget(embeddedResult, { embeddedCount: cappedLimits.embeddedImageCount, imageBytes: 0 }, cappedLimits).reason, 'export exceeds the 64 embedded-image limit');
+
+// Retry-After parsing stays inside sane bounds, whatever the provider sends.
+assert.equal(retryDelayMs(null), 5000);
+assert.equal(retryDelayMs('not-a-number'), 5000);
+assert.equal(retryDelayMs('2'), 2000);
+assert.equal(retryDelayMs('0.1'), 1000);
+assert.equal(retryDelayMs('9999'), 15000);
 
 const imageConversation = normalizeConversation(await load('image-conversation.json'));
 assert.equal(imageConversation.messages[0].textBlocks[0].type, 'image');
@@ -195,7 +206,7 @@ assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.11\.0/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.12\.0/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -267,6 +278,52 @@ const selectedImages = await resolveConversationImages(imageVariants, {
 assert.equal(selectedImages.stats.imageEmbeddedCount, 1);
 assert.equal(selectedImages.stats.imageExcludedCount, 2);
 assert.equal(selectedImages.stats.imageUnavailableCount, 0);
+
+// A single generated image now well over the old 3 MiB per-image cap embeds.
+const bigPng = new Uint8Array(4 * 1024 * 1024);
+const bigImageConversation = normalizeConversation({
+  title: 'Large image',
+  mapping: {
+    root: { parent: null, children: ['big'] },
+    big: { parent: 'root', children: [], message: { id: 'big', author: { role: 'assistant' }, content: { parts: [{ content_type: 'image_asset_pointer', asset_pointer: 'sediment://file-bigimage', metadata: { generation: {} } }] } } },
+  },
+  current_node: 'big',
+});
+const okImageResponse = () => ({ status: 200, ok: true, headers: { get: (name) => (name.toLowerCase() === 'content-type' ? 'image/png' : null) }, arrayBuffer: async () => bigPng.buffer });
+const bigResolved = await resolveConversationImages(bigImageConversation, {
+  conversationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  authContext: { headers: {} },
+  fetchImpl: async () => okImageResponse(),
+});
+assert.equal(bigResolved.stats.imageEmbeddedCount, 1);
+assert.equal(bigResolved.stats.imageBudgetLimitedCount, 0);
+assert.equal(bigResolved.stats.imageBytes, bigPng.length);
+
+// A 429 mid-export is retried once rather than dropping the image.
+let throttledCalls = 0;
+const sleptFor = [];
+const throttledResolved = await resolveConversationImages(bigImageConversation, {
+  conversationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  authContext: { headers: {} },
+  sleep: async (ms) => { sleptFor.push(ms); },
+  fetchImpl: async () => {
+    throttledCalls += 1;
+    if (throttledCalls === 1) return { status: 429, ok: false, headers: { get: (name) => (name.toLowerCase() === 'retry-after' ? '2' : 'image/png') } };
+    return okImageResponse();
+  },
+});
+assert.equal(throttledResolved.stats.imageEmbeddedCount, 1);
+assert.deepEqual(sleptFor, [2000]);
+
+// A second 429 is a real failure, not an endless retry loop.
+const alwaysThrottled = await resolveConversationImages(bigImageConversation, {
+  conversationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  authContext: { headers: {} },
+  sleep: async () => {},
+  fetchImpl: async () => ({ status: 429, ok: false, headers: { get: () => null } }),
+});
+assert.equal(alwaysThrottled.stats.imageEmbeddedCount, 0);
+assert.equal(alwaysThrottled.stats.imageUnavailableCount, 1);
 const offsetSelectedImages = await resolveConversationImages(imageVariants, {
   conversationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   selectedImageIndices: new Set([4]),
@@ -296,9 +353,9 @@ assert.match(metadataRequests[0], /files\/download\/file-abc123/);
 assert.match(coreSource, /imagePointerFromValue|execution-output/);
 assert.match(assetsSource, /files\/download/);
 assert.match(assetsSource, /dataImageResult/);
-assert.match(assetsSource, /perImageBytes: 3 \* 1024 \* 1024/);
-assert.match(assetsSource, /totalBytes: 12 \* 1024 \* 1024/);
-assert.match(assetsSource, /embeddedImageCount: 64/);
+assert.match(assetsSource, /perImageBytes: Infinity/);
+assert.match(assetsSource, /totalBytes: Infinity/);
+assert.match(assetsSource, /embeddedImageCount: Infinity/);
 assert.match(assetsSource, /applyImageBudget/);
 assert.match(assetsSource, /\/backend-api\/files\/download/);
 assert.match(assetsSource, /\/backend-api\/estuary\/content/);
@@ -312,6 +369,13 @@ assert.match(assetsSource, /includeImages/);
 assert.match(coreSource, /IMAGE_MODEL_KEYS/);
 assert.match(coreSource, /unknown \/ not found/);
 assert.match(uiSource, /imageModel/);
+// The image chooser carries a select-all toggle and a running size readout.
+assert.match(uiSource, /cge-image-select-all/);
+assert.match(uiSource, /Select all/);
+assert.match(uiSource, /indeterminate/);
+assert.match(uiSource, /cge-selection-summary/);
+assert.match(uiSource, /aria-live/);
+assert.match(uiSource, /of \$\{inputs\.length\} selected/);
 assert.match(assetsSource, /imageExcludedCount/);
 const approvedImageUrl = 'https://chatgpt.com/backend-api/estuary/content?id=test&ts=1&p=fs&sig=test&v=0';
 assert.equal(candidateDownloadUrl({ nested: { href: approvedImageUrl } }), approvedImageUrl);
@@ -494,7 +558,7 @@ assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.11\.0/);
+assert.match(buildSource, /@version      0\.12\.0/);
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/c/*'));
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/s/*'));
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/g/*'));

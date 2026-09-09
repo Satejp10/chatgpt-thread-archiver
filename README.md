@@ -14,7 +14,7 @@ It runs locally in your browser, uses your existing signed-in session, and does 
 
 ### Quick install with Tampermonkey or another userscript manager
 
-![Chrome Web Store listing for Tampermonkey](docs/assets/install-guide.png)
+![Tampermonkey Chrome Web Store listing with the browser-specific install button highlighted](docs/assets/install-guide.jpg)
 
 1. Open the [Tampermonkey listing in the Chrome Web Store](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo), choose the browser’s install button, and accept the extension prompt.
 2. Open [`dist/chatgpt-chats-exporter.user.js`](https://github.com/Satejp10/chatgpt-thread-archiver/blob/main/dist/chatgpt-chats-exporter.user.js) on GitHub, click **Raw**, and then click **Install** in your script manager.

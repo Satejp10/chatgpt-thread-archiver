@@ -10,7 +10,7 @@ Resource hints are evidence only. They must remain same-origin, match the allowl
 
 ## Renderer boundaries
 
-`src/core.mjs` owns normalization, bounded recursive content parsing, escaping, privacy-gated metadata, offline HTML generation, and the prompt rail. The rail’s inline behavior is a static string constant. Conversation text must never be interpolated into the exported script. `src/export-stats.mjs` owns local word, character, text-block, role, and model counts and must remain independent of provider token or billing APIs. The optional per-message model indicator is enabled by default, can be disabled in export preferences, appears only on assistant messages, and shows `Model: unknown / not found` when no safe model identifier is available.
+`src/core.mjs` owns normalization, bounded recursive content parsing, escaping, privacy-gated metadata, offline HTML generation, and the prompt rail. The rail’s inline behavior is a static string constant. Conversation text must never be interpolated into the exported script. `src/export-stats.mjs` owns local word, character, text-block, role, and model counts and must remain independent of provider token or billing APIs. The optional per-message model indicator is enabled by default, can be disabled in export preferences, appears only on assistant messages, and shows `Model: unknown / not found` when no safe model identifier is available. Generated-image labels use the same preference and may show an image model only when a bounded image-specific field provides a safe exact identifier; otherwise they show `Image model: unknown / not found`. Never infer an image model from the surrounding assistant model.
 
 The generated HTML includes a restrictive CSP because Part B adds an inline script. If future features require external assets, they must be treated as a deliberate threat-model change rather than silently added to the document. Local statistics must carry an explicit disclaimer that they count exported text only and are not provider token/context-window measurements.
 
@@ -24,7 +24,7 @@ Privacy preferences store URL/title/conversation-ID booleans, the broad ChatGPT 
 
 ## Version-history invariant
 
-Every version built from v0.10.0 onward must have one Markdown record in `docs/version-history/v<major>.<minor>.<patch>.md`. Create the record as a candidate before opening the pull request, include automated and live validation separately, and update it with the merge commit and stable status after merge. Follow `docs/version-history/README.md`; never place raw conversation data, browser logs, cookies, tokens, signed URLs, or full private identifiers in release records.
+Every version built from v0.10.0 onward must have one Markdown record in `docs/version-history/v<major>.<minor>.<patch>.md`; v0.11.0 additionally records image-model discovery evidence and live-validation status separately. Create the record as a candidate before opening the pull request, include automated and live validation separately, and update it with the merge commit and stable status after merge. Follow `docs/version-history/README.md`; never place raw conversation data, browser logs, cookies, tokens, signed URLs, or full private identifiers in release records.
 
 ## Validation debt
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
-import { normalizeConversation, renderConversationHtml, sanitizeFilename, textToBlocks, ConversationShapeError, selectConversationBranch, messagesFromBranchTree } from './src/core.mjs';
+import { normalizeConversation, renderConversationHtml, sanitizeFilename, textToBlocks, ConversationShapeError, selectConversationBranch, messagesFromBranchTree, discoverImageModelMetadata } from './src/core.mjs';
 import { ChatGPTClientError, clearAccessTokenCache, describeClientError, endpointCandidates, getAuthContext, getConversationIdFromUrl, isExporterRoute, parseConversationRoute } from './src/chatgpt-client.mjs';
 import { applyImageBudget, candidateDownloadUrl, IMAGE_LIMITS, resolveConversationImages } from './src/chatgpt-assets.mjs';
 import { deriveExportStats } from './src/export-stats.mjs';
@@ -47,8 +47,8 @@ assert.match(simpleHtml, /class="copy-btn"/);
 assert.match(simpleHtml, /querySelector\("\.content"\)/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.10\.0"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.10\.0/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.11\.0"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.11\.0/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -195,10 +195,33 @@ assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.10\.0/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.11\.0/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
+assert.deepEqual(discoverImageModelMetadata({ metadata: { generation: { model: 'gpt-image-2.5-sunburst' } } }), { found: true, model: 'gpt-image-2.5-sunburst' });
+assert.deepEqual(discoverImageModelMetadata({ metadata: { dalle: true } }), { found: false, model: 'unknown / not found' });
+assert.deepEqual(discoverImageModelMetadata({ image_model: 'javascript:alert(1)' }), { found: false, model: 'unknown / not found' });
+const imageModelConversation = normalizeConversation({
+  title: 'Image model',
+  mapping: {
+    root: { parent: null, children: ['image-model'] },
+    'image-model': {
+      parent: 'root',
+      children: [],
+      message: {
+        id: 'image-model',
+        author: { role: 'assistant' },
+        content: { parts: [{ content_type: 'image_asset_pointer', asset_pointer: 'sediment://file-model', metadata: { generation: { model: 'gpt-image-2.5-sunburst' } } }] },
+      },
+    },
+  },
+  current_node: 'image-model',
+});
+assert.equal(imageModelConversation.messages[1].textBlocks[0].asset.imageModel, 'gpt-image-2.5-sunburst');
+const embeddedModelMessages = imageModelConversation.messages.map((message) => ({ ...message, textBlocks: message.textBlocks.map((block) => block.type === 'image' ? { ...block, asset: { ...block.asset, status: 'embedded', dataUrl: 'data:image/png;base64,iVBORw0KGgo=' } } : block) }));
+assert.match(renderConversationHtml({ ...imageModelConversation, messages: embeddedModelMessages }), /Image model: gpt-image-2\.5-sunburst/);
+assert.doesNotMatch(renderConversationHtml({ ...imageModelConversation, messages: embeddedModelMessages }, { includeMessageModels: false }), /Image model:/);
 const imageVariants = normalizeConversation({
   title: 'Image variants',
   mapping: {
@@ -286,6 +309,9 @@ assert.match(assetsSource, /IMAGE_LIMITS/);
 assert.match(assetsSource, /imageIndexOffset/);
 assert.match(assetsSource, /data:\$\{mime\};base64/);
 assert.match(assetsSource, /includeImages/);
+assert.match(coreSource, /IMAGE_MODEL_KEYS/);
+assert.match(coreSource, /unknown \/ not found/);
+assert.match(uiSource, /imageModel/);
 assert.match(assetsSource, /imageExcludedCount/);
 const approvedImageUrl = 'https://chatgpt.com/backend-api/estuary/content?id=test&ts=1&p=fs&sig=test&v=0';
 assert.equal(candidateDownloadUrl({ nested: { href: approvedImageUrl } }), approvedImageUrl);
@@ -468,7 +494,7 @@ assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.10\.0/);
+assert.match(buildSource, /@version      0\.11\.0/);
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/c/*'));
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/s/*'));
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/g/*'));

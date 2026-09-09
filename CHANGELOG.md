@@ -2,6 +2,16 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.11.0] — candidate
+
+### Added
+
+Added optional generated-image model labels. When a safe, image-specific model identifier is exposed by the conversation payload, the offline caption and individual-image chooser show it. Otherwise they show `unknown / not found` rather than inferring a model from the surrounding assistant model, prompt, filename, or image appearance.
+
+### Privacy and reliability
+
+The discovery path is bounded to image-specific metadata keys, rejects unsafe or oversized identifiers, and never records image bytes, signed URLs, response bodies, cookies, authorization headers, conversation text, or full private identifiers. Live testing remains required to determine whether the current ChatGPT image-generation flow exposes a reliable exact model field.
+
 ## [0.10.0] — candidate
 
 ### Added

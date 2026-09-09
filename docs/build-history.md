@@ -47,7 +47,8 @@ The current bundling order is important. `build.mjs` concatenates `src/core.mjs`
 
 | Release | Main purpose | Validation status | Release state |
 |---|---|---|---|
-| `v0.11.0` | Optional generated-image model labels from bounded image-specific metadata with unknown/not-found fallback | Local build/check pending final candidate validation; live generated-image metadata discovery remains | Candidate on feature branch |
+| `v0.12.0` | Removed the automatic image size/count budget, added a select-all toggle and running size total to the image chooser, and retry-once handling for throttled image downloads | Local build/check completed, including uncapped-embed and 429-retry coverage; live large-export and chooser testing remains | Candidate on feature branch |
+| `v0.11.0` | Optional generated-image model labels from bounded image-specific metadata with unknown/not-found fallback | Local build/check completed; live testing established that ChatGPT exposes no per-image model identifier, so the label always falls back to unknown/not found | Released on `main` |
 | `v0.10.0` | Experimental message-level local fork controls for edited prompts and regenerated responses, including nested fork points | Local build/check completed; browser fixture validation passed; live provider testing remains | Historical candidate |
 | `v0.9.1` | Fix the exported offline interaction script so Dark mode, Copy, and navigation controls initialize | Local build/check completed; live offline-control testing passed | **Current stable release** |
 | `v0.9.0` | ChatGPT Projects `/g/*` activation and optional all-branch export for edited prompts/regenerated responses | Local build/check completed; live Projects and branch testing remains | Historical |

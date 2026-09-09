@@ -32,6 +32,10 @@
       #${OPTIONS_ID} .cge-actions { display: flex; gap: 9px; justify-content: flex-end; margin-top: 20px; }
       #${OPTIONS_ID} fieldset { max-height: min(60vh, 520px); overflow: auto; margin: 16px 0 0; padding: 8px 12px; border: 1px solid rgb(156 163 175 / .45); border-radius: 9px; }
       #${OPTIONS_ID} legend { padding: 0 5px; font-weight: 700; }
+      #${OPTIONS_ID} .cge-selection-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; }
+      #${OPTIONS_ID} .cge-select-all { font-weight: 600; }
+      #${OPTIONS_ID} .cge-selection-summary { margin: 0; font-size: 12px; opacity: .75; }
+      #${OPTIONS_ID} .cge-selection-toolbar + fieldset { margin-top: 8px; }
       #${OPTIONS_ID} button { border: 0; border-radius: 8px; padding: 9px 13px; cursor: pointer; font: inherit; }
       #${OPTIONS_ID} .cge-primary { background: #111827; color: white; }
       #${OPTIONS_ID} .cge-secondary { background: rgb(127 127 127 / .16); color: CanvasText; }
@@ -205,7 +209,8 @@
   function formatImageSize(bytes) {
     if (!Number.isFinite(bytes) || bytes < 0) return 'size unknown';
     if (bytes < 1024) return `${bytes} B`;
-    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   function showImageSelection(conversation) {
@@ -222,6 +227,15 @@
       heading.textContent = 'Choose images to include';
       const intro = document.createElement('p');
       intro.textContent = 'Images are selected by default. Unselected images will not be downloaded and will be marked as excluded in the HTML.';
+      const toolbar = document.createElement('div');
+      toolbar.className = 'cge-selection-toolbar';
+      const selectAll = checkbox('cge-image-select-all', 'Select all', true);
+      selectAll.wrapper.className = 'cge-select-all';
+      const summary = document.createElement('p');
+      summary.className = 'cge-selection-summary';
+      summary.setAttribute('aria-live', 'polite');
+      toolbar.append(selectAll.wrapper, summary);
+
       const fieldset = document.createElement('fieldset');
       const legend = document.createElement('legend');
       legend.textContent = `${entries.length} image${entries.length === 1 ? '' : 's'} found`;
@@ -232,9 +246,32 @@
         const modelLabel = entry.generated ? ` · ${entry.imageModel}` : '';
         const image = checkbox(`cge-image-${entry.index}`, `Image ${entry.index + 1}${branchLabel} · message ${entry.messageIndex} · ${entry.speaker} · ${entry.generated ? 'generated' : 'uploaded/reference'}${modelLabel} · ${formatImageSize(entry.sizeBytes)}`, true);
         image.input.dataset.imageIndex = String(entry.index);
+        image.input.dataset.sizeBytes = Number.isFinite(entry.sizeBytes) ? String(entry.sizeBytes) : '';
         inputs.push(image.input);
         fieldset.appendChild(image.wrapper);
       }
+
+      // The export no longer caps embedded images, so the running total is the
+      // only signal that a selection will produce an unwieldy file.
+      const refreshSummary = () => {
+        const checked = inputs.filter((input) => input.checked);
+        const known = checked.filter((input) => input.dataset.sizeBytes !== '');
+        const bytes = known.reduce((total, input) => total + Number(input.dataset.sizeBytes), 0);
+        const approximate = known.length < checked.length ? ' at least ' : ' ';
+        summary.textContent = checked.length === 0
+          ? `No images selected · the export will contain none.`
+          : `${checked.length} of ${inputs.length} selected ·${approximate}${formatImageSize(bytes)} to embed`;
+        selectAll.input.checked = checked.length === inputs.length;
+        selectAll.input.indeterminate = checked.length > 0 && checked.length < inputs.length;
+      };
+      selectAll.input.addEventListener('change', () => {
+        const next = selectAll.input.checked;
+        for (const input of inputs) input.checked = next;
+        refreshSummary();
+      });
+      for (const input of inputs) input.addEventListener('change', refreshSummary);
+      refreshSummary();
+
       const actions = document.createElement('div');
       actions.className = 'cge-actions';
       const cancel = document.createElement('button');
@@ -246,7 +283,7 @@
       continueButton.className = 'cge-primary';
       continueButton.textContent = 'Export selected';
       actions.append(cancel, continueButton);
-      card.append(heading, intro, fieldset, actions);
+      card.append(heading, intro, toolbar, fieldset, actions);
       overlay.appendChild(card);
       document.body.appendChild(overlay);
       const close = (selection) => { overlay.remove(); resolve(selection); };

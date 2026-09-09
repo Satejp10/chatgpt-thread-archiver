@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Image Metadata Probe (temporary diagnostic)
 // @namespace    https://github.com/Satejp10/chatgpt-thread-archiver
-// @version      0.1.0
+// @version      0.2.0
 // @description  One-off diagnostic. Reports ONLY structural field names for generated images so we can learn whether ChatGPT exposes an image-model identifier. Never outputs prompts, image bytes, URLs, or conversation text.
 // @match        https://chatgpt.com/c/*
 // @match        https://chatgpt.com/g/*
@@ -48,13 +48,28 @@
     return type;
   }
 
+  const MAX_DEPTH = 5;
+
   function shape(obj, label, out, depth = 0) {
-    if (!isObj(obj) || depth > 3) return;
-    out.push(`${'  '.repeat(depth)}${label}:`);
+    const pad = '  '.repeat(depth);
+    if (!isObj(obj)) return;
+    if (depth > MAX_DEPTH) {
+      out.push(`${pad}${label}: <depth limit>`);
+      return;
+    }
+    out.push(`${pad}${label}:`);
     for (const key of Object.keys(obj).sort()) {
       const value = obj[key];
+      if (isObj(value)) {
+        shape(value, key, out, depth + 1);
+        continue;
+      }
+      if (Array.isArray(value) && value.some(isObj)) {
+        out.push(`${'  '.repeat(depth + 1)}${key} = array[${value.length}]`);
+        value.slice(0, 3).forEach((item, i) => shape(item, `${key}[${i}]`, out, depth + 2));
+        continue;
+      }
       out.push(`${'  '.repeat(depth + 1)}${key} = ${describe(key, value)}`);
-      if (isObj(value) && depth < 3) shape(value, key, out, depth + 2);
     }
   }
 

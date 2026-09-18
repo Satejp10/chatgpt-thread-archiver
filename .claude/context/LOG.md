@@ -96,6 +96,20 @@ warning. On Claude every node is a real message; there is no structural drop.
 maintained by hand (`cp`), so a release that forgets it leaves the two artifacts
 out of sync.
 
+**Did (later, same day):** v0.13.1 after the owner's live test of v0.13.0 —
+`renderBranchTree` only built fork controls below a parent message, so an edited
+*opening* prompt rendered as consecutive turns instead of one switcher. Factored
+the fork markup into a `renderFork` helper used for both a message's children and
+the root list.
+
+**Learned:** ChatGPT's "Branch to a new chat" (Sept 2025) creates a separate
+conversation with its own ID, not a branch inside the tree. The `mapping` /
+`parent` / `current_node` shape this exporter reads is unchanged, so it needs no
+support work. Established from third-party reporting, not a live response.
+
+**Learned:** Brightdata MCP needed re-authentication and could not be used this
+session; fell back to normal web search per the owner's stated preference.
+
 **Open:** Claude uploaded images and attachments are still not embedded — they
 render as `[non-text content omitted: Claude attachment or file content]`. Image
 embedding is ChatGPT-only; supporting Claude needs a scope decision and one live

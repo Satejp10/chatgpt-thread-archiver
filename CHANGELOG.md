@@ -2,7 +2,17 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
-## [0.13.0] — candidate
+## [0.13.1] — candidate
+
+### Fixed
+
+An edited first prompt now gets its own `‹ 1/2 ›` switcher. The renderer built fork controls only below a parent message, so alternatives that fork at the root — which is what editing the opening prompt produces — were stacked one after another as if they were separate turns. A v0.13.0 export of a two-version opening prompt therefore listed four messages in a row instead of two, with one switcher. The root list is now rendered as a fork like any other, matching how the provider's own UI presents versions. Applies to both ChatGPT and Claude.
+
+### Notes
+
+ChatGPT's **Branch to a new chat** action, added September 2025, creates a separate conversation with its own ID rather than a branch inside the current tree. It does not change the `mapping` / `parent` / `current_node` shape this exporter reads, so it needs no support work; a branched chat is exported like any other conversation.
+
+## [0.13.0] — 2026-09-18
 
 ### Fixed
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.13.0
+// @version      0.13.1
 // @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, uncapped image selection, optional image-model labels, and safe local statistics.
 // @match        https://chatgpt.com/c/*
 // @match        https://chatgpt.com/s/*
@@ -13,7 +13,7 @@
 
 (() => {
 'use strict';
-const ARCHIVER_VERSION = '0.13.0';
+const ARCHIVER_VERSION = '0.13.1';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -836,20 +836,28 @@ function renderMessageList(messages, branchIndex, branchCount, includeMessageMod
 function renderBranchTree(tree, activeIds, includeMessageModels, railItems) {
   const state = { messageIndex: 0, forkIndex: 0 };
   const containsActive = (node) => Boolean(node && (activeIds.has(node.message.id) || node.children.some(containsActive)));
+  // One set of `‹ n/m ›` controls over a list of alternatives. Used for a fork below a
+  // message and for the root list itself: editing the very first prompt forks the
+  // conversation at the root, with no parent message to hang the controls under, and
+  // those alternatives need the same switcher as any other fork rather than being
+  // stacked one after the other.
+  const renderFork = (children) => {
+    const forkId = `fork-${String(++state.forkIndex).padStart(3, '0')}`;
+    let activeIndex = children.findIndex(containsActive);
+    if (activeIndex < 0) activeIndex = 0;
+    const options = children.map((child, index) => `<div class="branch-option" data-fork-id="${forkId}" data-branch-index="${index}"${index === activeIndex ? ' data-active="true"' : ''}>${renderNode(child)}</div>`).join('');
+    const controls = `<div class="branch-choice" data-fork-id="${forkId}" data-active-index="${activeIndex}" role="group" aria-label="Conversation alternatives"><button type="button" data-branch-prev aria-label="Previous alternative">‹</button><span data-branch-position>${activeIndex + 1}/${children.length}</span><button type="button" data-branch-next aria-label="Next alternative">›</button></div>`;
+    return `<div class="branch-fork" data-fork-id="${forkId}">${options}${controls}</div>`;
+  };
   const renderNode = (node) => {
     const id = `m-tree-${String(++state.messageIndex).padStart(4, '0')}`;
     const article = renderMessageArticle(node.message, id, state.messageIndex, includeMessageModels, railItems);
     if (!Array.isArray(node.children) || node.children.length <= 1) {
       return `${article}${node.children?.[0] ? renderNode(node.children[0]) : ''}`;
     }
-    const forkId = `fork-${String(++state.forkIndex).padStart(3, '0')}`;
-    let activeIndex = node.children.findIndex(containsActive);
-    if (activeIndex < 0) activeIndex = 0;
-    const options = node.children.map((child, index) => `<div class="branch-option" data-fork-id="${forkId}" data-branch-index="${index}"${index === activeIndex ? ' data-active="true"' : ''}>${renderNode(child)}</div>`).join('');
-    const controls = `<div class="branch-choice" data-fork-id="${forkId}" data-active-index="${activeIndex}" role="group" aria-label="Conversation alternatives"><button type="button" data-branch-prev aria-label="Previous alternative">‹</button><span data-branch-position>${activeIndex + 1}/${node.children.length}</span><button type="button" data-branch-next aria-label="Next alternative">›</button></div>`;
-    return `${article}<div class="branch-fork" data-fork-id="${forkId}">${options}${controls}</div>`;
+    return `${article}${renderFork(node.children)}`;
   };
-  return tree.map(renderNode).join('\n');
+  return tree.length > 1 ? renderFork(tree) : tree.map(renderNode).join('\n');
 }
 
 function renderConversationHtml(conversation, { exportedAt = new Date().toISOString(), sourceUrl = null, includeConversationId = false, includeTitle = true, includeMessageModels = true, includeAllBranches = false } = {}) {

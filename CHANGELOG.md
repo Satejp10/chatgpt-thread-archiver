@@ -2,7 +2,7 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
-## [0.14.0] — candidate
+## [0.14.0] — 2026-09-18
 
 ### Added
 

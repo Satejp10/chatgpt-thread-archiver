@@ -1,4 +1,4 @@
-const ARCHIVER_VERSION = '0.14.0';
+const ARCHIVER_VERSION = '0.15.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -588,7 +588,74 @@ export function textToBlocks(text) {
   return blocks;
 }
 
-function renderBlock(block, includeMessageModels = true) {
+function formatThinkingDuration(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return '';
+  const seconds = Math.round(durationMs / 1000);
+  if (seconds < 60) return ` for ${seconds}s`;
+  return ` for ${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function toolLabel(block) {
+  const name = String(block.toolName ?? '').trim();
+  const integration = String(block.integration ?? '').trim();
+  if (integration && name) return `${integration} · ${name}`;
+  return integration || name || 'tool';
+}
+
+// Thinking and tool blocks are collapsed by default: they are supporting detail, and an
+// agentic conversation carries more of them than answers. <details> needs no script, so
+// they still open in a file viewed with JavaScript disabled.
+function renderThinkingBlock(block) {
+  const summaries = Array.isArray(block.summaries) ? block.summaries.filter((line) => String(line ?? '').trim()) : [];
+  const text = String(block.text ?? '').trim();
+  const label = `Thought${formatThinkingDuration(block.durationMs)}`;
+  const truncated = block.truncated ? '<p class="thinking-note">Claude stopped this reasoning early.</p>' : '';
+  // Claude's server sends an empty `thinking` string with `thinking_hidden: true`, so
+  // saying the export omitted it would be wrong: it was never sent.
+  const body = text
+    ? `<div class="thinking-text" dir="auto">${textToBlocks(text).map((part) => (part.type === 'code' ? `<pre class="code-block"><code>${part.html}</code></pre>` : `<p>${part.html}</p>`)).join('')}</div>`
+    : summaries.length
+      ? `<ul class="thinking-steps">${summaries.map((line) => `<li dir="auto">${escapeHtml(line)}</li>`).join('')}</ul>`
+      : '<p class="thinking-note">Claude did not send the reasoning for this step.</p>';
+  const withheld = text || !block.withheldByProvider ? '' : '<p class="thinking-note">Full reasoning text is not provided by Claude; these are its own summary lines.</p>';
+  return `<details class="thinking-block"><summary>${escapeHtml(label)}</summary>${body}${withheld}${truncated}</details>`;
+}
+
+function renderToolUseBlock(block) {
+  const input = block.input && typeof block.input === 'object'
+    ? `<pre class="tool-input"><code>${escapeHtml(safeJson(block.input))}</code></pre>`
+    : '<p class="thinking-note">No input recorded.</p>';
+  const status = String(block.status ?? '').trim();
+  return `<div class="tool-block"><p class="tool-head"><span class="tool-tag">Tool</span> ${escapeHtml(toolLabel(block))}${status ? ` · ${escapeHtml(status)}` : ''}</p>${input}</div>`;
+}
+
+function renderToolResultBlock(block) {
+  const text = String(block.text ?? '').trim();
+  const label = `${block.isError ? 'Tool error' : 'Tool result'} · ${toolLabel(block)}${formatThinkingDuration(block.durationMs)}`;
+  const body = text
+    ? `<pre class="tool-output"><code>${escapeHtml(text)}</code></pre>`
+    : '<p class="thinking-note">No output recorded.</p>';
+  return `<details class="tool-block${block.isError ? ' tool-error' : ''}"><summary>${escapeHtml(label)}</summary>${body}</details>`;
+}
+
+// JSON.stringify throws on a cycle, and a tool input is provider data rather than ours.
+function safeJson(value) {
+  try {
+    return JSON.stringify(value, null, 2) ?? '';
+  } catch {
+    return '[input could not be serialized]';
+  }
+}
+
+const THINKING_BLOCK_TYPES = new Set(['thinking', 'tool_use', 'tool_result']);
+
+function renderBlock(block, includeMessageModels = true, includeThinking = false) {
+  if (THINKING_BLOCK_TYPES.has(block.type)) {
+    if (!includeThinking) return '';
+    if (block.type === 'thinking') return renderThinkingBlock(block);
+    if (block.type === 'tool_use') return renderToolUseBlock(block);
+    return renderToolResultBlock(block);
+  }
   if (block.type === 'omitted') return `<p class="omitted">[non-text content omitted: ${escapeHtml(block.reason)}]</p>`;
   if (block.type === 'image') {
     const asset = block.asset ?? {};
@@ -703,6 +770,17 @@ header.export-head { margin-bottom: 24px; }
 .content p { margin: 0 0 12px; }
 .content p:last-child { margin-bottom: 0; }
 .content code { background: rgb(175 184 193 / .2); padding: .15em .35em; border-radius: 4px; font-size: .9em; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.thinking-block, .tool-block { margin: 12px 0; border: 1px solid var(--border); border-left: 3px solid var(--muted); border-radius: 6px; background: var(--surface); padding: 8px 12px; }
+.thinking-block > summary, .tool-block > summary { cursor: pointer; color: var(--muted); font-size: .9em; }
+.thinking-block[open] > summary, .tool-block[open] > summary { margin-bottom: 8px; }
+.thinking-steps { margin: 0; padding-left: 20px; color: var(--muted); font-size: .92em; }
+.thinking-steps li { margin: 3px 0; }
+.thinking-text p { margin: 6px 0; color: var(--muted); }
+.thinking-note { margin: 6px 0 0; color: var(--muted); font-size: .85em; font-style: italic; }
+.tool-head { margin: 0 0 6px; font-size: .9em; color: var(--muted); }
+.tool-tag { display: inline-block; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); font-size: .82em; }
+.tool-input, .tool-output { max-height: 320px; overflow: auto; margin: 0; }
+.tool-block.tool-error { border-left-color: #c0392b; }
 .image-block { margin: 14px 0; text-align: center; }
 .image-block img { display: inline-block; max-width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--border); background: #fff; }
 .image-block figcaption { margin-top: 6px; color: var(--muted); font-size: .82em; }
@@ -803,10 +881,10 @@ const EXPORT_JS = [
   '})();',
 ].join('\n');
 
-function renderMessageArticle(message, id, messageIndex, includeMessageModels, railItems, branchLabel = '') {
+function renderMessageArticle(message, id, messageIndex, includeMessageModels, railItems, branchLabel = '', includeThinking = false) {
   const timestamp = formatTimestamp(message.createdAt);
   const timestampValue = timestampIso(message.createdAt);
-  const blocks = message.textBlocks.map((block) => renderBlock(block, includeMessageModels)).join('') || '<p class="empty-message">[empty message]</p>';
+  const blocks = message.textBlocks.map((block) => renderBlock(block, includeMessageModels, includeThinking)).join('') || '<p class="empty-message">[empty message]</p>';
   const copyButton = '<button class="copy-btn" type="button">Copy</button>';
   if (message.role === 'user') {
     railItems.push(`<li><a href="#${id}"><span>${escapeHtml(branchLabel + railLabel(messagePlainText(message)))}</span></a></li>`);
@@ -816,17 +894,17 @@ function renderMessageArticle(message, id, messageIndex, includeMessageModels, r
   return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}${hiddenClass}" id="${id}" data-message-index="${messageIndex}" data-message-id="${escapeAttribute(message.id)}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${messageModelLine(message, includeMessageModels)}${timestamp ? `<span class="msg-time"><time${datetime}>${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
 }
 
-function renderMessageList(messages, branchIndex, branchCount, includeMessageModels, railItems) {
+function renderMessageList(messages, branchIndex, branchCount, includeMessageModels, railItems, includeThinking = false) {
   return messages.map((message, index) => {
     const id = branchCount > 1
       ? `m-b${String(branchIndex + 1).padStart(2, '0')}-${String(index + 1).padStart(4, '0')}`
       : `m-${String(index + 1).padStart(4, '0')}`;
     const branchPrefix = branchCount > 1 ? `Branch ${branchIndex + 1} · ` : '';
-    return renderMessageArticle(message, id, index + 1, includeMessageModels, railItems, branchPrefix);
+    return renderMessageArticle(message, id, index + 1, includeMessageModels, railItems, branchPrefix, includeThinking);
   }).join('\n');
 }
 
-function renderBranchTree(tree, activeIds, includeMessageModels, railItems) {
+function renderBranchTree(tree, activeIds, includeMessageModels, railItems, includeThinking = false) {
   const state = { messageIndex: 0, forkIndex: 0 };
   const containsActive = (node) => Boolean(node && (activeIds.has(node.message.id) || node.children.some(containsActive)));
   // One set of `‹ n/m ›` controls over a list of alternatives. Used for a fork below a
@@ -846,7 +924,7 @@ function renderBranchTree(tree, activeIds, includeMessageModels, railItems) {
   };
   const renderNode = (node) => {
     const id = `m-tree-${String(++state.messageIndex).padStart(4, '0')}`;
-    const article = renderMessageArticle(node.message, id, state.messageIndex, includeMessageModels, railItems);
+    const article = renderMessageArticle(node.message, id, state.messageIndex, includeMessageModels, railItems, '', includeThinking);
     if (!Array.isArray(node.children) || node.children.length <= 1) {
       return `${article}${node.children?.[0] ? renderNode(node.children[0]) : ''}`;
     }
@@ -855,7 +933,7 @@ function renderBranchTree(tree, activeIds, includeMessageModels, railItems) {
   return tree.length > 1 ? renderFork(tree) : tree.map(renderNode).join('\n');
 }
 
-export function renderConversationHtml(conversation, { exportedAt = new Date().toISOString(), sourceUrl = null, includeConversationId = false, includeTitle = true, includeMessageModels = true, includeAllBranches = false } = {}) {
+export function renderConversationHtml(conversation, { exportedAt = new Date().toISOString(), sourceUrl = null, includeConversationId = false, includeTitle = true, includeMessageModels = true, includeAllBranches = false, includeThinking = false } = {}) {
   const provider = typeof conversation.provider === 'string' && conversation.provider.trim() ? conversation.provider.trim() : 'ChatGPT';
   const availableBranches = Array.isArray(conversation.branches) && conversation.branches.length > 1 ? conversation.branches : [];
   const localTree = includeAllBranches && Array.isArray(conversation.branchTree) && conversation.branchTree.length > 0 ? conversation.branchTree : [];
@@ -870,8 +948,8 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
   const activeIds = new Set((activeBranchMessages ?? []).map((message) => message.id));
   const renderedMessages = useLocalTree ? messagesFromBranchTree(localTree) : branchRecords.flatMap((branch) => branch.messages ?? []);
   const messagesHtml = useLocalTree
-    ? renderBranchTree(localTree, activeIds, includeMessageModels, railItems)
-    : branchRecords.map((branch, index) => `<div class="branch-view" data-branch-index="${index}">${renderMessageList(branch.messages, index, branchCount, includeMessageModels, railItems)}</div>`).join('\n');
+    ? renderBranchTree(localTree, activeIds, includeMessageModels, railItems, includeThinking)
+    : branchRecords.map((branch, index) => `<div class="branch-view" data-branch-index="${index}">${renderMessageList(branch.messages, index, branchCount, includeMessageModels, railItems, includeThinking)}</div>`).join('\n');
   const branchNavigator = !useLocalTree && branchCount > 1
     ? `<div id="branch-nav" class="branch-nav" role="group" aria-label="Conversation branches"><button id="branch-prev" type="button" aria-label="Previous branch">‹</button><span id="branch-position">Branch 1/${branchCount}</span><button id="branch-next" type="button" aria-label="Next branch">›</button></div>`
     : '';
@@ -899,6 +977,13 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
   const coverageLine = (conversation.stats.droppedNodeCount ?? 0) > 0 || (conversation.stats.duplicateMessageCount ?? 0) > 0
     ? `<p class="meta flag-warn">Coverage: ${conversation.stats.droppedNodeCount ?? 0} dropped node${conversation.stats.droppedNodeCount === 1 ? '' : 's'}, ${conversation.stats.duplicateMessageCount ?? 0} duplicate message${conversation.stats.duplicateMessageCount === 1 ? '' : 's'} removed</p>`
     : '';
+  // A conversation with tool calls carries more supporting blocks than answers, so an
+  // export that leaves them out says so once rather than marking each one.
+  const reasoningCount = renderedMessages.reduce((sum, message) => sum + (message.textBlocks ?? []).filter((block) => THINKING_BLOCK_TYPES.has(block.type)).length, 0);
+  const reasoningLine = reasoningCount > 0 && !includeThinking
+    ? `<p class="meta">Not exported: ${reasoningCount} thinking and tool block${reasoningCount === 1 ? '' : 's'}. Re-export with &quot;Include Claude thinking and tool calls&quot; to keep them.</p>`
+    : '';
+
   // Messages on branches this export did not take are withheld by choice, not lost, so
   // they get a neutral line rather than the coverage warning. An export that already
   // carries every branch is withholding nothing, whatever the source count says.
@@ -935,6 +1020,7 @@ ${idMeta}
   ${sourceBlock}
   ${omissionLine}
   ${imageLine}
+  ${reasoningLine}
   ${coverageLine}
   ${alternateLine}
   ${hiddenLine}

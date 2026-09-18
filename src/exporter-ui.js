@@ -83,7 +83,7 @@
   }
 
   function defaultPrefs() {
-    return { url: true, title: true, conversationId: false, imageMode: 'all', messageModels: true, branchMode: 'all', prefsVersion: PREFS_VERSION };
+    return { url: true, title: true, conversationId: false, imageMode: 'all', messageModels: true, branchMode: 'all', thinking: false, prefsVersion: PREFS_VERSION };
   }
 
   function parsePrefs(raw) {
@@ -94,9 +94,12 @@
       if (!value || typeof value !== 'object' || keys.some((key) => typeof value[key] !== 'boolean')) return null;
       const imageMode = ['all', 'none', 'choose'].includes(value.imageMode) ? value.imageMode : 'all';
       const messageModels = typeof value.messageModels === 'boolean' ? value.messageModels : true;
+      // Reasoning and tool detail stays out unless the person asks for it: an export gets
+      // shared, and a stored preference that predates this option must not opt them in.
+      const thinking = value.thinking === true;
       const branchMode = ['active', 'all'].includes(value.branchMode) ? value.branchMode : 'active';
       const prefsVersion = Number.isInteger(value.prefsVersion) ? value.prefsVersion : 0;
-      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode, messageModels, branchMode, prefsVersion };
+      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode, messageModels, branchMode, thinking, prefsVersion };
     } catch {
       return null;
     }
@@ -149,6 +152,7 @@
         imageMode: ['all', 'none', 'choose'].includes(prefs.imageMode) ? prefs.imageMode : 'all',
         messageModels: prefs.messageModels !== false,
         branchMode: ['active', 'all'].includes(prefs.branchMode) ? prefs.branchMode : 'active',
+        thinking: prefs.thinking === true,
         prefsVersion: PREFS_VERSION,
       }));
     } catch {
@@ -322,6 +326,7 @@
     const title = checkbox('cge-pref-title', 'Include the conversation title and use it in the filename', prefs.title);
     const conversationId = checkbox('cge-pref-conversation-id', 'Include the conversation ID in the HTML metadata', prefs.conversationId);
     const messageModels = checkbox('cge-pref-message-models', 'Show a model label on each assistant message', prefs.messageModels);
+    const thinking = checkbox('cge-pref-thinking', 'Include Claude thinking and tool calls (collapsed in the file)', prefs.thinking === true);
     const imageChoices = [];
     let imageFieldset = null;
     const branchChoices = [];
@@ -334,7 +339,7 @@
       branchChoices.push(branchRadio.input);
       branchFieldset.appendChild(branchRadio.wrapper);
     }
-    if (provider === 'ChatGPT') {
+    {
       imageFieldset = document.createElement('fieldset');
       const imageLegend = document.createElement('legend');
       imageLegend.textContent = 'Images';
@@ -356,7 +361,7 @@
     exportButton.className = 'cge-primary';
     exportButton.textContent = 'Export HTML';
     actions.append(cancel, exportButton);
-    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper, messageModels.wrapper, branchFieldset);
+    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper, messageModels.wrapper, thinking.wrapper, branchFieldset);
     if (imageFieldset) card.appendChild(imageFieldset);
     card.appendChild(actions);
     overlay.appendChild(card);
@@ -371,6 +376,7 @@
         title: title.input.checked,
         conversationId: conversationId.input.checked,
         messageModels: messageModels.input.checked,
+        thinking: thinking.input.checked,
         imageMode: provider === 'ChatGPT' ? (imageChoices.find((input) => input.checked)?.value ?? prefs.imageMode) : prefs.imageMode,
         branchMode: branchChoices.find((input) => input.checked)?.value ?? prefs.branchMode,
       };
@@ -484,6 +490,7 @@
         includeConversationId: prefs.conversationId,
         includeTitle: prefs.title,
         includeMessageModels: prefs.messageModels !== false,
+        includeThinking: prefs.thinking === true,
         includeAllBranches,
       });
       downloadHtml(html, filenameFor(exportableConversation, prefs, exportedAt));

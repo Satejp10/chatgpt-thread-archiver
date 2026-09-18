@@ -168,3 +168,34 @@ it promised never to print.
 attachments are still omission markers (unplanned). The `Image model:` caption
 decision still blocks deleting `diagnostics/`; both probes there have now done
 their job.
+
+## 2026-09-18 — v0.15.0: Claude reasoning and tool calls
+
+**Shipped:** Claude exports can carry reasoning summaries and tool calls. They were
+dropped entirely before. Off by default, one checkbox to include, collapsed
+`<details>` in the file. Owner's decision on both defaults.
+
+**The finding that shaped it:** Claude does not send the raw reasoning text.
+Every thinking block in the live sample came back `thinking_hidden: true` with
+`thinking` as a zero-length string. The `summaries[].summary` lines and the
+start/stop timestamps are the whole of what any export can carry, and
+"Thought for 56s" is computed from those timestamps. The exporter still reads
+`thinking` so a payload that does carry it is not thrown away.
+
+Tool calls are fully present: `name`, `integration_name`, `input`, `message`,
+timestamps, and a `content[]` array of text parts up to ~20 KB each.
+`display_content.json_block` duplicates that array formatted for Claude's UI and
+is deliberately not read — carrying both would roughly double an export.
+
+**Also fixed:** the image preferences were still gated to ChatGPT in the options
+dialog, so a Claude user could not reach the chooser. v0.14.0's release note
+claimed otherwise. Corrected here.
+
+**Lesson — a look-alike example in chat cost a round.** The owner pasted the
+probe's illustrative OUTPUT into the console instead of the probe, and the `---`
+lines threw `Invalid left-hand side expression`. Show the paste-ready thing or
+the example, not both next to each other.
+
+**Open:** live acceptance of v0.13.x, v0.14.0 and v0.15.0. Claude PDFs and text
+attachments are still omission markers. Both probes have done their job; deleting
+`diagnostics/` still waits on the `Image model:` decision.

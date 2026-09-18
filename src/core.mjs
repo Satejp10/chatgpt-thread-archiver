@@ -1,4 +1,4 @@
-const ARCHIVER_VERSION = '0.12.0';
+const ARCHIVER_VERSION = '0.13.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -862,7 +862,7 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
     : branchCount > 1
       ? `All ${provider} conversation branches exported.`
       : conversation.activeBranch
-        ? (availableBranchCount > 1 ? `Active ${provider} conversation branch exported; ${availableBranchCount - 1} alternate branch${availableBranchCount === 2 ? '' : 'es'} available.` : `Active ${provider} conversation branch exported.`)
+        ? (availableBranchCount > 1 ? `Active ${provider} conversation branch exported; ${availableBranchCount - 1} alternate branch${availableBranchCount === 2 ? '' : 'es'} available (edited prompts or regenerated replies).` : `Active ${provider} conversation branch exported.`)
         : `${provider} message array exported.`;
   const rawTitle = includeTitle ? conversation.title : `${provider} conversation`;
   const title = escapeHtml(rawTitle);
@@ -880,6 +880,13 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
     : '';
   const coverageLine = (conversation.stats.droppedNodeCount ?? 0) > 0 || (conversation.stats.duplicateMessageCount ?? 0) > 0
     ? `<p class="meta flag-warn">Coverage: ${conversation.stats.droppedNodeCount ?? 0} dropped node${conversation.stats.droppedNodeCount === 1 ? '' : 's'}, ${conversation.stats.duplicateMessageCount ?? 0} duplicate message${conversation.stats.duplicateMessageCount === 1 ? '' : 's'} removed</p>`
+    : '';
+  // Messages on branches this export did not take are withheld by choice, not lost, so
+  // they get a neutral line rather than the coverage warning. An export that already
+  // carries every branch is withholding nothing, whatever the source count says.
+  const withheldCount = !useLocalTree && branchCount === 1 ? (conversation.stats.alternateBranchMessageCount ?? 0) : 0;
+  const alternateLine = withheldCount > 0
+    ? `<p class="meta">Not exported: ${withheldCount} message${withheldCount === 1 ? '' : 's'} on ${availableBranchCount - 1} other branch${availableBranchCount === 2 ? '' : 'es'}. Re-export with &quot;Include edited and regenerated branches&quot; to keep them.</p>`
     : '';
   const hiddenLine = (conversation.stats.hiddenMessageCount ?? 0) > 0
     ? `<p class="meta flag-warn">${conversation.stats.hiddenMessageCount} message${conversation.stats.hiddenMessageCount === 1 ? '' : 's'} marked hidden by ${escapeHtml(provider)}; included unchanged</p>`
@@ -911,6 +918,7 @@ ${idMeta}
   ${omissionLine}
   ${imageLine}
   ${coverageLine}
+  ${alternateLine}
   ${hiddenLine}
   ${branchNavigator}
 </header>

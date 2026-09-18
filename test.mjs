@@ -47,8 +47,8 @@ assert.match(simpleHtml, /class="copy-btn"/);
 assert.match(simpleHtml, /querySelector\("\.content"\)/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.12\.0"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.12\.0/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.13\.0"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.13\.0/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -206,7 +206,7 @@ assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.12\.0/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.13\.0/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -493,6 +493,35 @@ assert.match(claudeSource, /current_leaf_message_uuid/);
 assert.match(claudeSource, /type === 'thinking' \|\| block\.type === 'tool_result'/);
 assert.match(claudeSource, /provider: 'Claude'/);
 
+// A Claude chat whose server-side current-branch pointer lags the screen: the leaf
+// points at stale-reply-2 while the regenerated stale-reply-3 is what the user sees.
+// Exporting every branch is what keeps the regenerated reply in the file.
+const staleLeaf = normalizeClaudeConversation(await load('claude-stale-leaf.json'), 'claude-stale-leaf-id');
+assert.equal(staleLeaf.activeBranch, true);
+assert.equal(staleLeaf.branches.length, 3);
+assert.deepEqual(staleLeaf.branches[0].messages.map((message) => message.id), ['stale-prompt-2', 'stale-reply-2']);
+assert.equal(staleLeaf.stats.droppedNodeCount, 0);
+assert.equal(staleLeaf.stats.alternateBranchMessageCount, 3);
+const staleAllHtml = renderConversationHtml({ ...staleLeaf, stats: deriveExportStats(messagesFromBranchTree(staleLeaf.branchTree), staleLeaf.stats, { model: staleLeaf.model }) }, { includeAllBranches: true });
+assert.match(staleAllHtml, /Reply to the original prompt/);
+assert.match(staleAllHtml, /Reply the server still points at/);
+assert.match(staleAllHtml, /Regenerated reply the screen actually shows/);
+assert.match(staleAllHtml, /class="branch-fork"/);
+assert.doesNotMatch(staleAllHtml, /Not exported:/);
+assert.doesNotMatch(staleAllHtml, /dropped node/);
+const staleActiveHtml = renderConversationHtml(staleLeaf, { exportedAt: '2026-09-18T12:58:28.687Z' });
+assert.match(staleActiveHtml, /Not exported: 3 messages on 2 other branches/);
+assert.match(staleActiveHtml, /Include edited and regenerated branches/);
+assert.doesNotMatch(staleActiveHtml, /dropped node/);
+assert.doesNotMatch(staleActiveHtml, /flag-warn">Coverage/);
+assert.match(staleActiveHtml, /2 alternate branches available \(edited prompts or regenerated replies\)/);
+
+// Every version is captured unless the owner deliberately narrows the export.
+assert.match(uiSource, /const PREFS_VERSION = 1;/);
+assert.match(uiSource, /branchMode: 'all', prefsVersion: PREFS_VERSION/);
+assert.match(uiSource, /if \(prefs\.prefsVersion < PREFS_VERSION\) \{/);
+assert.match(uiSource, /\['all', 'Include edited and regenerated branches'\], \['active', 'Export current branch only'\]/);
+
 const response = (status, payload = {}) => ({ status, ok: status >= 200 && status < 300, headers: { get: () => 'application/json' }, json: async () => payload });
 clearAccessTokenCache();
 assert.equal((await getAuthContext(async () => response(401))).authFailure.code, 'signed-out');
@@ -558,7 +587,7 @@ assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.12\.0/);
+assert.match(buildSource, /@version      0\.13\.0/);
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/c/*'));
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/s/*'));
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/g/*'));

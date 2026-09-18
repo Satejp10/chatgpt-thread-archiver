@@ -5,6 +5,7 @@
   const STYLE_ID = 'chatgpt-chats-exporter-style';
   const PREF_KEY = 'chatgpt-thread-archiver-prefs';
   const LEGACY_PREF_KEY = 'chatgpt-chats-exporter-prefs';
+  const PREFS_VERSION = 1;
 
   function addStyles() {
     if (document.getElementById(STYLE_ID)) return;
@@ -82,7 +83,7 @@
   }
 
   function defaultPrefs() {
-    return { url: true, title: true, conversationId: false, imageMode: 'all', messageModels: true, branchMode: 'active' };
+    return { url: true, title: true, conversationId: false, imageMode: 'all', messageModels: true, branchMode: 'all', prefsVersion: PREFS_VERSION };
   }
 
   function parsePrefs(raw) {
@@ -94,7 +95,8 @@
       const imageMode = ['all', 'none', 'choose'].includes(value.imageMode) ? value.imageMode : 'all';
       const messageModels = typeof value.messageModels === 'boolean' ? value.messageModels : true;
       const branchMode = ['active', 'all'].includes(value.branchMode) ? value.branchMode : 'active';
-      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode, messageModels, branchMode };
+      const prefsVersion = Number.isInteger(value.prefsVersion) ? value.prefsVersion : 0;
+      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode, messageModels, branchMode, prefsVersion };
     } catch {
       return null;
     }
@@ -124,6 +126,14 @@
     try {
       const stored = parsePrefs(localStorage.getItem(PREF_KEY)) ?? parsePrefs(localStorage.getItem(LEGACY_PREF_KEY));
       if (stored) Object.assign(prefs, stored);
+      // Installs saved before v0.13.0 kept the old current-branch-only default, which
+      // silently dropped edited and regenerated versions. Move them to the new default
+      // once; a choice saved after the upgrade carries PREFS_VERSION and is left alone.
+      if (prefs.prefsVersion < PREFS_VERSION) {
+        prefs.branchMode = 'all';
+        prefs.prefsVersion = PREFS_VERSION;
+        savePrefs(prefs);
+      }
     } catch {
       // Defaults remain active when storage is unavailable or malformed.
     }
@@ -139,6 +149,7 @@
         imageMode: ['all', 'none', 'choose'].includes(prefs.imageMode) ? prefs.imageMode : 'all',
         messageModels: prefs.messageModels !== false,
         branchMode: ['active', 'all'].includes(prefs.branchMode) ? prefs.branchMode : 'active',
+        prefsVersion: PREFS_VERSION,
       }));
     } catch {
       // Preference persistence is optional and must never block an export.
@@ -318,7 +329,7 @@
     const branchLegend = document.createElement('legend');
     branchLegend.textContent = 'Conversation branches';
     branchFieldset.appendChild(branchLegend);
-    for (const choice of [['active', 'Export current branch only'], ['all', 'Include edited and regenerated branches']]) {
+    for (const choice of [['all', 'Include edited and regenerated branches'], ['active', 'Export current branch only']]) {
       const branchRadio = radio('cge-branch-mode', `cge-branch-mode-${choice[0]}`, choice[1], choice[0], prefs.branchMode === choice[0]);
       branchChoices.push(branchRadio.input);
       branchFieldset.appendChild(branchRadio.wrapper);

@@ -2,7 +2,25 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
-## [0.12.0] — candidate
+## [0.13.0] — candidate
+
+### Fixed
+
+Claude exports no longer lose edited prompts or regenerated replies. The exporter chose which version to save from `current_leaf_message_uuid`, the pointer Claude's server keeps for the current branch. That pointer can lag what is on screen just after an edit or a regenerate, so an export taken in that window saved the previous version and discarded the one the user was looking at — intermittently, since reloading the page resyncs it. Every branch is now exported by default, with the inline fork arrows already built for it, so the pointer no longer decides what survives.
+
+### Changed
+
+The conversation-branch preference now defaults to **Include edited and regenerated branches**. Existing installs are moved to the new default once; a choice saved after upgrading is left alone.
+
+Messages sitting on branches an export did not take are no longer counted as `dropped nodes` in a yellow coverage warning. On Claude every node is a real message, so nothing was ever structurally dropped — those messages are withheld by choice. A single-branch export now says plainly how many messages are on other branches and which setting keeps them.
+
+### Notes
+
+All-branch exports are larger, and images are resolved per branch, so a heavily branched conversation with many images downloads more than before. The image chooser labels each entry with its branch.
+
+The `Image model:` caption is unchanged; that product decision is still open.
+
+## [0.12.0] — 2026-09-09
 
 ### Changed
 

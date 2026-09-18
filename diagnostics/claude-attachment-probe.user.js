@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Claude Attachment Probe (temporary diagnostic)
 // @namespace    https://github.com/Satejp10/chatgpt-thread-archiver
-// @version      0.1.0
+// @version      0.1.1
 // @description  One-off diagnostic. Reports ONLY structural field names, value types, and redacted route shapes for Claude attachments, so image-upload support can be built against the real payload instead of a guess. Never outputs prompts, file names, image bytes, full URLs, or conversation text.
-// @match        https://claude.ai/chat/*
+// @match        https://claude.ai/*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
@@ -252,24 +252,56 @@
     document.body.appendChild(box);
   }
 
-  const button = document.createElement('button');
-  button.textContent = 'Claude attachment probe';
-  button.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:2147483646;padding:8px 14px;border-radius:6px;border:1px solid #666;background:#222;color:#eee;font:13px system-ui;cursor:pointer';
-  button.onclick = async () => {
-    button.disabled = true;
-    button.textContent = 'Reading…';
-    try {
-      const org = organizationId();
-      if (!org) throw new Error('no lastActiveOrg cookie — sign in and reload');
-      const id = conversationId();
-      if (!id) throw new Error('no conversation ID in this URL');
-      panel(await probe(await conversation(org, id)));
-    } catch (error) {
-      panel(`PROBE FAILED: ${error.message}`);
-    } finally {
-      button.disabled = false;
-      button.textContent = 'Claude attachment probe';
+  const BUTTON_ID = 'claude-probe-button';
+  const LABEL = 'Claude attachment probe';
+
+  function makeButton() {
+    const button = document.createElement('button');
+    button.id = BUTTON_ID;
+    button.type = 'button';
+    button.textContent = LABEL;
+    button.style.cssText = 'position:fixed;bottom:64px;right:16px;z-index:2147483646;padding:8px 14px;border-radius:6px;border:1px solid #666;background:#222;color:#eee;font:13px system-ui;cursor:pointer';
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      button.textContent = 'Reading…';
+      try {
+        const org = organizationId();
+        if (!org) throw new Error('no lastActiveOrg cookie — sign in and reload');
+        const id = conversationId();
+        if (!id) throw new Error('no conversation ID in this URL');
+        panel(await probe(await conversation(org, id)));
+      } catch (error) {
+        panel(`PROBE FAILED: ${error.message}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = LABEL;
+      }
+    });
+    return button;
+  }
+
+  // claude.ai is a single-page app: a client-side navigation never re-runs a userscript,
+  // and a React re-render can drop a node appended to body. The shipping exporter
+  // reinstalls its control on every DOM mutation for exactly this reason, and the probe
+  // has to do the same or it simply never appears.
+  function install() {
+    const onConversation = conversationId() !== null;
+    const existing = document.getElementById(BUTTON_ID);
+    if (!onConversation) {
+      existing?.remove();
+      return;
     }
-  };
-  document.body.appendChild(button);
+    if (existing || !document.body) return;
+    document.body.appendChild(makeButton());
+  }
+
+  function boot() {
+    if (!document.body) return window.setTimeout(boot, 50);
+    install();
+    if (window.MutationObserver && document.documentElement) {
+      new MutationObserver(() => install()).observe(document.documentElement, { childList: true, subtree: true });
+    }
+  }
+
+  boot();
 })();

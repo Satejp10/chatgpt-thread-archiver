@@ -88,6 +88,12 @@ headers. There is no telemetry and no third-party request.
 3. Click **Claude attachment probe** (bottom right).
 4. Copy the panel contents.
 
+The button sits just above the exporter's own **Export HTML** control, bottom right.
+Like the exporter, the probe reinstalls itself on DOM mutation and matches all of
+`claude.ai`, checking the route itself: claude.ai is a single-page app, so a
+client-side navigation never re-runs a userscript and a React re-render can drop a
+node appended to `body`. A probe that installs once simply never appears.
+
 ### What the output means
 
 - A URL-shaped field reachable same-origin with an `image/*` content type → embedding

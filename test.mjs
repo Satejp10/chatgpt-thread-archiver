@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
 import { normalizeConversation, renderConversationHtml, sanitizeFilename, textToBlocks, ConversationShapeError, selectConversationBranch, messagesFromBranchTree, discoverImageModelMetadata, extractTextBlocks } from './src/core.mjs';
 import { ChatGPTClientError, clearAccessTokenCache, describeClientError, endpointCandidates, getAuthContext, getConversationIdFromUrl, isExporterRoute, parseConversationRoute } from './src/chatgpt-client.mjs';
-import { applyImageBudget, candidateDownloadUrl, IMAGE_LIMITS, resolveConversationImages, retryDelayMs } from './src/chatgpt-assets.mjs';
+import { applyImageBudget, candidateDownloadUrl, IMAGE_LIMITS, resolveClaudeConversationImages, resolveConversationImages, retryDelayMs } from './src/assets.mjs';
 import { deriveExportStats } from './src/export-stats.mjs';
 import { ClaudeClientError, claudeConversationPath, fetchClaudeConversation, getClaudeConversationIdFromUrl, isClaudeExporterRoute, normalizeClaudeConversation, parseClaudeConversationRoute } from './src/claude-client.mjs';
 
@@ -11,7 +11,7 @@ const load = async (name) => JSON.parse(await readFile(new URL(`./fixtures/${nam
 const clientSource = await readFile(new URL('./src/chatgpt-client.mjs', import.meta.url), 'utf8');
 const coreSource = await readFile(new URL('./src/core.mjs', import.meta.url), 'utf8');
 const uiSource = await readFile(new URL('./src/exporter-ui.js', import.meta.url), 'utf8');
-const assetsSource = await readFile(new URL('./src/chatgpt-assets.mjs', import.meta.url), 'utf8');
+const assetsSource = await readFile(new URL('./src/assets.mjs', import.meta.url), 'utf8');
 const statsSource = await readFile(new URL('./src/export-stats.mjs', import.meta.url), 'utf8');
 const claudeSource = await readFile(new URL('./src/claude-client.mjs', import.meta.url), 'utf8');
 const buildSource = await readFile(new URL('./build.mjs', import.meta.url), 'utf8');
@@ -47,8 +47,8 @@ assert.match(simpleHtml, /class="copy-btn"/);
 assert.match(simpleHtml, /querySelector\("\.content"\)/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.13\.2"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.13\.2/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.14\.0"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.14\.0/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -215,7 +215,7 @@ assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.13\.2/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.14\.0/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -466,6 +466,49 @@ assert.match(renderConversationHtml(claude, { exportedAt: '2026-08-22T00:00:00.0
 assert.match(renderConversationHtml(claude, { exportedAt: '2026-08-22T00:00:00.000Z' }), /\[non-text content omitted: Claude attachment or file content\]/);
 assert.doesNotMatch(renderConversationHtml(claude), /private reasoning/);
 assert.doesNotMatch(renderConversationHtml(claude), /This regenerated branch should not be selected/);
+// Claude uploaded images (payload shape confirmed live on 2026-09-18).
+const claudeImages = normalizeClaudeConversation(await load('claude-image-conversation.json'), 'claude-image-id');
+const claudeImageBlocks = claudeImages.messages[0].textBlocks;
+assert.deepEqual(claudeImageBlocks.map((block) => block.type), ['text', 'image', 'omitted']);
+assert.equal(claudeImageBlocks[0].text, 'What is in this screenshot?');
+assert.equal(claudeImageBlocks[1].asset.width, 1162);
+assert.equal(claudeImageBlocks[1].asset.height, 616);
+assert.equal(claudeImageBlocks[1].asset.sizeBytes, 61202);
+// Claude has no image generation, so no export may ever label one of these generated.
+assert.equal(claudeImageBlocks[1].asset.generated, false);
+assert.equal(claudeImageBlocks[1].asset.imageModel, null);
+// A non-image attachment still has no fetchable representation and stays a marker.
+assert.equal(claudeImageBlocks[2].reason, 'Claude attachment or file content');
+assert.equal(claudeImages.messages[0].omittedCount, 1);
+// The pointer is never reported to the reader; only the embedded bytes are.
+assert.doesNotMatch(renderConversationHtml(claudeImages), /files\/[0-9a-f-]{36}\/preview/);
+
+const claudePng = 'iVBORw0KGgo=';
+const claudeImageFetch = async (url) => {
+  assert.match(String(url), /^https:\/\/claude\.ai\/api\/[0-9a-f-]+\/files\/[0-9a-f-]+\/preview$/);
+  return { status: 200, ok: true, headers: { get: (name) => (name === 'content-type' ? 'image/webp' : null) }, arrayBuffer: async () => Uint8Array.from(atob(claudePng), (c) => c.charCodeAt(0)).buffer };
+};
+const claudeResolved = await resolveClaudeConversationImages(claudeImages, { fetchImpl: claudeImageFetch, conversationId: 'claude-image-id' });
+assert.equal(claudeResolved.stats.imageCount, 1);
+assert.equal(claudeResolved.stats.imageEmbeddedCount, 1);
+assert.equal(claudeResolved.messages[0].textBlocks[1].asset.status, 'embedded');
+assert.match(claudeResolved.messages[0].textBlocks[1].asset.dataUrl, /^data:image\/webp;base64,/);
+assert.match(renderConversationHtml(claudeResolved), /<figure class="image-block">/);
+assert.match(renderConversationHtml(claudeResolved), /Uploaded\/reference image/);
+// No image-model caption may appear for a provider that cannot generate images.
+assert.doesNotMatch(renderConversationHtml(claudeResolved, { includeMessageModels: true }), /Image model:/);
+
+// A URL outside the confirmed same-origin file route is refused rather than fetched.
+const offRouteConversation = { ...claudeImages, messages: [{ ...claudeImages.messages[0], textBlocks: [{ type: 'image', asset: { pointer: 'https://evil.example/api/x/files/y/preview' } }] }] };
+const offRouteResolved = await resolveClaudeConversationImages(offRouteConversation, { fetchImpl: async () => { throw new Error('must not fetch an unapproved host'); } });
+assert.equal(offRouteResolved.messages[0].textBlocks[0].asset.status, 'unavailable');
+assert.match(offRouteResolved.messages[0].textBlocks[0].asset.reason, /approved same-origin Claude file route/);
+// The Claude path must not mint or read a bearer token.
+const noAuthResolved = await resolveClaudeConversationImages(claudeImages, { fetchImpl: claudeImageFetch, authContext: null });
+assert.equal(noAuthResolved.stats.imageEmbeddedCount, 1);
+assert.match(assetsSource, /requiresAuth = true/);
+assert.match(uiSource, /resolveClaudeConversationImages/);
+
 const nestedBranches = normalizeConversation(await load('nested-branches.json'));
 assert.equal(nestedBranches.branches.length, 4);
 assert.equal(messagesFromBranchTree(nestedBranches.branchTree).length, 7);
@@ -604,14 +647,14 @@ assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.13\.2/);
+assert.match(buildSource, /@version      0\.14\.0/);
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/c/*'));
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/s/*'));
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/g/*'));
 assert.ok(buildSource.includes('// @match        https://claude.ai/chat/*'));
 assert.ok(!buildSource.includes('// @match        https://chatgpt.com/*'));
 assert.match(buildSource, /source\('claude-client\.mjs'\)/);
-assert.match(buildSource, /source\('chatgpt-assets\.mjs'\)/);
+assert.match(buildSource, /source\('assets\.mjs'\)/);
 assert.match(buildSource, /source\('export-stats\.mjs'\)/);
 assert.match(buildSource, /\$\{claude\}/);
 assert.match(buildSource, /\$\{assets\}/);

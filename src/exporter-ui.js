@@ -398,9 +398,9 @@
     };
   }
 
-  async function resolveAllConversationBranches(conversation, options = {}) {
+  async function resolveAllConversationBranches(conversation, options = {}, resolve = resolveConversationImages) {
     const branches = Array.isArray(conversation?.branches) && conversation.branches.length > 1 ? conversation.branches : [];
-    if (branches.length === 0) return resolveConversationImages(conversation, options);
+    if (branches.length === 0) return resolve(conversation, options);
     const totalImages = imageEntries(conversation).length;
     let imageOffset = 0;
     let completed = 0;
@@ -408,7 +408,7 @@
     for (const branch of branches) {
       const branchConversation = { ...conversation, messages: branch.messages, branches: [], stats: branch.stats };
       const branchImageCount = imageEntries(branchConversation).length;
-      const resolved = await resolveConversationImages(branchConversation, {
+      const resolved = await resolve(branchConversation, {
         ...options,
         imageIndexOffset: imageOffset,
         onProgress: () => options.onProgress?.(++completed, totalImages),
@@ -449,34 +449,28 @@
       showStatus('Formatting messages…');
       const normalized = provider === 'Claude' ? normalizeClaudeConversation(raw, conversationId) : normalizeConversation(raw);
       const includeAllBranches = prefs.branchMode === 'all' && Array.isArray(normalized.branches) && normalized.branches.length > 1;
+      // The image preferences are provider-neutral: Claude uploads go through the same
+      // chooser, the same "none" switch and the same embedding path as ChatGPT images.
       let selectedImageIndices = null;
-      let includeImages = true;
-      if (provider === 'ChatGPT') {
-        includeImages = prefs.imageMode !== 'none';
-        if (prefs.imageMode === 'choose') {
-          showStatus('Choose images…', 'Review the available images before any image downloads begin.');
-          selectedImageIndices = await showImageSelection(normalized);
-          if (selectedImageIndices === null) {
-            showStatus('Export cancelled');
-            return;
-          }
+      const includeImages = prefs.imageMode !== 'none';
+      if (prefs.imageMode === 'choose') {
+        showStatus('Choose images…', 'Review the available images before any image downloads begin.');
+        selectedImageIndices = await showImageSelection(normalized);
+        if (selectedImageIndices === null) {
+          showStatus('Export cancelled');
+          return;
         }
       }
-      const conversation = provider === 'Claude'
-        ? normalized
-        : includeAllBranches
-          ? await resolveAllConversationBranches(normalized, {
-            conversationId,
-            includeImages,
-            selectedImageIndices,
-            onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
-          })
-          : await resolveConversationImages(normalized, {
-            conversationId,
-            includeImages,
-            selectedImageIndices,
-            onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
-          });
+      const resolveImages = provider === 'Claude' ? resolveClaudeConversationImages : resolveConversationImages;
+      const imageOptions = {
+        conversationId,
+        includeImages,
+        selectedImageIndices,
+        onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
+      };
+      const conversation = includeAllBranches
+        ? await resolveAllConversationBranches(normalized, imageOptions, resolveImages)
+        : await resolveImages(normalized, imageOptions);
       const statsMessages = includeAllBranches
         ? (conversation.branchTree?.length ? messagesFromBranchTree(conversation.branchTree) : conversation.branches.flatMap((branch) => branch.messages))
         : conversation.messages;

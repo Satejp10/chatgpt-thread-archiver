@@ -2,7 +2,23 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
-## [0.13.2] — candidate
+## [0.14.0] — candidate
+
+### Added
+
+**Claude exports now embed uploaded images.** Until this release every image attached to a Claude prompt came out as an omission marker. The field carrying the bytes was established by running the diagnostic probe against a live conversation rather than guessed: an uploaded image sits on `message.files[]` with `file_kind: "image"` and a same-origin `preview_url` that returns the image directly to the signed-in session. The preview is the largest variant Claude stores — there is no original-size route — so it is what gets embedded.
+
+The image preferences stop being ChatGPT-only. Include all, exclude all, and the per-image chooser now apply to Claude uploads on the same terms, including in an all-branches export.
+
+### Changed
+
+The image pipeline module is no longer named for one provider (`src/chatgpt-assets.mjs` → `src/assets.mjs`). Selection, budget, caching and the reported statistics were already provider-neutral; turning one asset into bytes is now an injected step. The Claude path mints and reads no bearer token — the session cookie carries the authorization — and accepts only a `claude.ai` URL matching the confirmed `/api/<id>/files/<id>/(preview|thumbnail)` route. Anything else is refused rather than fetched.
+
+### Notes
+
+Claude PDFs and text attachments are still omission markers. The chooser's size figures read high for Claude: the payload gives the uploaded file's size, while the export embeds the smaller preview variant. The `KB embedded` figure in the header, counted after the fetch, is exact.
+
+## [0.13.2] — 2026-09-18
 
 ### Changed
 
@@ -12,7 +28,7 @@ An uploaded image now appears **after** the prompt it was sent with, not before 
 
 ### Notes
 
-Claude uploads are still not embedded — they remain `[non-text content omitted: Claude attachment or file content]` markers. Image embedding is ChatGPT-only. Claude has no image generation, so uploads are the whole of what support would mean there; it is a scoped piece of work, not yet planned.
+Claude uploads are still not embedded in this release — see 0.14.0.
 
 ## [0.13.1] — 2026-09-18
 

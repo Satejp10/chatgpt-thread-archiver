@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.13.2
+// @version      0.14.0
 // @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, uncapped image selection, optional image-model labels, and safe local statistics.
 // @match        https://chatgpt.com/c/*
 // @match        https://chatgpt.com/s/*
@@ -13,7 +13,7 @@
 
 (() => {
 'use strict';
-const ARCHIVER_VERSION = '0.13.2';
+const ARCHIVER_VERSION = '0.14.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -1577,6 +1577,30 @@ function omittedBlock(reason) {
   return { type: 'omitted', reason };
 }
 
+function finiteOrNull(value) {
+  return Number.isFinite(value) ? value : null;
+}
+
+// `size_bytes` is the size of the file the person uploaded, not of the preview variant
+// the exporter embeds, so the image chooser's running total reads high for Claude. It is
+// the only size the payload gives before the bytes are fetched.
+function claudeImageBlock(file, previewUrl) {
+  const preview = file?.preview_asset && typeof file.preview_asset === 'object' ? file.preview_asset : {};
+  return {
+    type: 'image',
+    asset: {
+      pointer: previewUrl,
+      mimeType: '',
+      sizeBytes: finiteOrNull(file?.size_bytes),
+      width: finiteOrNull(preview?.image_width),
+      height: finiteOrNull(preview?.image_height),
+      // Claude has no image generation, so every image here is one the person uploaded.
+      generated: false,
+      imageModel: null,
+    },
+  };
+}
+
 function normalizeClaudeMessage(message, index) {
   const sender = String(message?.sender ?? 'unknown').toLowerCase();
   const role = sender === 'human' ? 'user' : sender === 'assistant' ? 'assistant' : 'unknown';
@@ -1606,7 +1630,16 @@ function normalizeClaudeMessage(message, index) {
     omittedCount += 1;
   }
 
-  if (Array.isArray(message?.files) && message.files.length > 0) {
+  // An uploaded image carries `file_kind: "image"` and a `preview_url` pointing at the
+  // largest variant Claude stores; there is no original-size route in the payload, so the
+  // preview is the best available copy. Anything else attached (a PDF, a text file) still
+  // has no fetchable representation here and stays an omission marker.
+  for (const file of Array.isArray(message?.files) ? message.files : []) {
+    const previewUrl = typeof file?.preview_url === 'string' ? file.preview_url.trim() : '';
+    if (String(file?.file_kind ?? '').toLowerCase() === 'image' && previewUrl) {
+      textBlocks.push(claudeImageBlock(file, previewUrl));
+      continue;
+    }
     textBlocks.push(omittedBlock('Claude attachment or file content'));
     omittedCount += 1;
   }
@@ -1952,7 +1985,8 @@ async function fetchImageBytes(fetchImpl, url, headers, timeoutMs, remainingByte
   return asAssetResult('embedded', null, { dataUrl: bytesToDataUrl(bytes, contentType), mimeType: contentType, byteLength: buffer.byteLength });
 }
 
-async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, timeoutMs, remainingBytes, limits = IMAGE_LIMITS, sleep = defaultSleep) {
+async function resolveOneImage(asset, context) {
+  const { conversationId, postId, auth, fetchImpl, timeoutMs, remainingBytes, limits = IMAGE_LIMITS, sleep = defaultSleep } = context;
   const pointer = String(asset?.pointer ?? '');
   if (!pointer) return asAssetResult('unavailable', 'image asset pointer is missing');
   const embedded = dataImageResult(pointer, remainingBytes, limits);
@@ -1998,7 +2032,43 @@ async function resolveOneImage(asset, conversationId, postId, auth, fetchImpl, t
   return asAssetResult('unavailable', lastReason, { fileId });
 }
 
-async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null, includeImages = true, selectedImageIndices = null, imageIndexOffset = 0, sleep = defaultSleep } = {}) {
+// Confirmed against a live Claude conversation on 2026-09-18: an uploaded image sits on
+// `message.files[]` with `preview_url` and `thumbnail_url`, both same-origin routes of
+// this shape that return image bytes directly to the signed-in session. Nothing else is
+// accepted, so a URL that appears anywhere else in the payload cannot make the exporter
+// fetch it.
+const CLAUDE_IMAGE_ROUTE_RE = /^\/api\/[A-Za-z0-9_-]{1,120}\/files\/[A-Za-z0-9_-]{1,120}\/(?:preview|thumbnail)$/;
+
+function allowedClaudeAssetUrl(raw) {
+  try {
+    const url = new URL(String(raw ?? ''), globalThis.location?.origin ?? 'https://claude.ai');
+    if (url.hostname !== 'claude.ai') return null;
+    if (!CLAUDE_IMAGE_ROUTE_RE.test(url.pathname.replace(/\/$/, ''))) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function resolveClaudeImage(asset, context) {
+  const { fetchImpl, timeoutMs, remainingBytes, limits = IMAGE_LIMITS, sleep = defaultSleep } = context;
+  const pointer = String(asset?.pointer ?? '');
+  if (!pointer) return asAssetResult('unavailable', 'image asset pointer is missing');
+  const url = allowedClaudeAssetUrl(pointer);
+  if (!url) return asAssetResult('unavailable', 'image URL is not an approved same-origin Claude file route');
+  // The session cookie carries the authorization; no bearer token is minted or read.
+  return fetchImageBytes(fetchImpl, url, {}, timeoutMs, remainingBytes, limits, sleep);
+}
+
+function resolveClaudeConversationImages(conversation, options = {}) {
+  return resolveConversationImages(conversation, { ...options, resolveOne: resolveClaudeImage, requiresAuth: false });
+}
+
+// Claude's uploaded images are a plain same-origin URL that already returns the bytes,
+// while ChatGPT's are a pointer that has to be traded for a download URL. Everything
+// around that — selection, budget, caching, the stats the header reports — is identical,
+// so the provider difference is one injected function rather than a second pipeline.
+async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null, includeImages = true, selectedImageIndices = null, imageIndexOffset = 0, sleep = defaultSleep, resolveOne = resolveOneImage, requiresAuth = true } = {}) {
   if (!conversation || !Array.isArray(conversation.messages)) return conversation;
   const imageBlocks = conversation.messages.flatMap((message) => (message.textBlocks ?? []).filter((block) => block.type === 'image').map((block) => ({ block, postId: message.id })));
   if (imageBlocks.length === 0) return { ...conversation, stats: { ...conversation.stats, imageCount: 0, imageEmbeddedCount: 0, imageExcludedCount: 0, imageUnavailableCount: 0, imageBytes: 0, imageBudgetLimitedCount: 0 } };
@@ -2007,7 +2077,7 @@ async function resolveConversationImages(conversation, { fetchImpl = globalThis.
   const safeImageIndexOffset = Number.isInteger(imageIndexOffset) && imageIndexOffset >= 0 ? imageIndexOffset : 0;
   const shouldInclude = (index) => Boolean(includeImages) && (selected === null || selected.has(index + safeImageIndexOffset));
   const shouldResolveAny = Boolean(includeImages) && (selected === null || selected.size > 0);
-  const auth = shouldResolveAny ? (authContext ?? await getAuthContext(fetchImpl)) : null;
+  const auth = shouldResolveAny && requiresAuth ? (authContext ?? await getAuthContext(fetchImpl)) : null;
   const cache = new Map();
   const occurrenceResults = [];
   let completed = 0;
@@ -2028,7 +2098,7 @@ async function resolveConversationImages(conversation, { fetchImpl = globalThis.
         const budgetExhausted = embeddedCount >= limits.embeddedImageCount || imageBytes >= limits.totalBytes;
         cache.set(pointer, budgetExhausted
           ? asAssetResult('unavailable', embeddedCount >= limits.embeddedImageCount ? `export exceeds the ${limits.embeddedImageCount} embedded-image limit` : `export exceeds the ${describeByteLimit(limits.totalBytes)} total embedded image budget`, { budgetLimited: true })
-          : await resolveOneImage(block.block.asset, conversationId, block.postId, auth, fetchImpl, timeoutMs, limits.totalBytes - imageBytes, limits, sleep));
+          : await resolveOne(block.block.asset, { conversationId, postId: block.postId, auth, fetchImpl, timeoutMs, remainingBytes: limits.totalBytes - imageBytes, limits, sleep }));
       }
       result = cache.get(pointer) ?? asAssetResult('unavailable', 'image resolution did not run');
       const budgetedResult = applyImageBudget(result, { embeddedCount, imageBytes }, limits);
@@ -2500,9 +2570,9 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
     };
   }
 
-  async function resolveAllConversationBranches(conversation, options = {}) {
+  async function resolveAllConversationBranches(conversation, options = {}, resolve = resolveConversationImages) {
     const branches = Array.isArray(conversation?.branches) && conversation.branches.length > 1 ? conversation.branches : [];
-    if (branches.length === 0) return resolveConversationImages(conversation, options);
+    if (branches.length === 0) return resolve(conversation, options);
     const totalImages = imageEntries(conversation).length;
     let imageOffset = 0;
     let completed = 0;
@@ -2510,7 +2580,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
     for (const branch of branches) {
       const branchConversation = { ...conversation, messages: branch.messages, branches: [], stats: branch.stats };
       const branchImageCount = imageEntries(branchConversation).length;
-      const resolved = await resolveConversationImages(branchConversation, {
+      const resolved = await resolve(branchConversation, {
         ...options,
         imageIndexOffset: imageOffset,
         onProgress: () => options.onProgress?.(++completed, totalImages),
@@ -2551,34 +2621,28 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
       showStatus('Formatting messages…');
       const normalized = provider === 'Claude' ? normalizeClaudeConversation(raw, conversationId) : normalizeConversation(raw);
       const includeAllBranches = prefs.branchMode === 'all' && Array.isArray(normalized.branches) && normalized.branches.length > 1;
+      // The image preferences are provider-neutral: Claude uploads go through the same
+      // chooser, the same "none" switch and the same embedding path as ChatGPT images.
       let selectedImageIndices = null;
-      let includeImages = true;
-      if (provider === 'ChatGPT') {
-        includeImages = prefs.imageMode !== 'none';
-        if (prefs.imageMode === 'choose') {
-          showStatus('Choose images…', 'Review the available images before any image downloads begin.');
-          selectedImageIndices = await showImageSelection(normalized);
-          if (selectedImageIndices === null) {
-            showStatus('Export cancelled');
-            return;
-          }
+      const includeImages = prefs.imageMode !== 'none';
+      if (prefs.imageMode === 'choose') {
+        showStatus('Choose images…', 'Review the available images before any image downloads begin.');
+        selectedImageIndices = await showImageSelection(normalized);
+        if (selectedImageIndices === null) {
+          showStatus('Export cancelled');
+          return;
         }
       }
-      const conversation = provider === 'Claude'
-        ? normalized
-        : includeAllBranches
-          ? await resolveAllConversationBranches(normalized, {
-            conversationId,
-            includeImages,
-            selectedImageIndices,
-            onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
-          })
-          : await resolveConversationImages(normalized, {
-            conversationId,
-            includeImages,
-            selectedImageIndices,
-            onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
-          });
+      const resolveImages = provider === 'Claude' ? resolveClaudeConversationImages : resolveConversationImages;
+      const imageOptions = {
+        conversationId,
+        includeImages,
+        selectedImageIndices,
+        onProgress: (completed, total) => showStatus('Processing image choices…', `${completed}/${total} image(s) processed`),
+      };
+      const conversation = includeAllBranches
+        ? await resolveAllConversationBranches(normalized, imageOptions, resolveImages)
+        : await resolveImages(normalized, imageOptions);
       const statsMessages = includeAllBranches
         ? (conversation.branchTree?.length ? messagesFromBranchTree(conversation.branchTree) : conversation.branches.flatMap((branch) => branch.messages))
         : conversation.messages;

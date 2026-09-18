@@ -39,6 +39,9 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Prompt before upload | In ChatGPT, send a prompt with an image attached, then export with images included | The message shows the prompt text first and the uploaded image below it |
 | Root-level edit | Edit the **first** prompt of a conversation, then export with all branches | The opening prompt shows as one message with a `‹ 1/2 ›` switcher, not as two separate turns stacked one after the other |
 | Claude stale branch pointer | Send a prompt, edit it, regenerate the reply, then export **without reloading the page** | Both the edited prompt and the regenerated reply are in the file; nothing from the conversation is missing |
+| Claude uploaded image | Export a Claude conversation with an image attached to a prompt | The image is embedded and appears below the prompt it was sent with; the file still opens with no network access; no `Image model:` caption appears, because Claude does not generate images |
+| Claude image chooser | Set images to **Choose images after loading the conversation**, then export a Claude conversation with two uploads and untick one | Only the ticked image is downloaded; the unticked one is marked excluded in the HTML |
+| Claude non-image attachment | Export a Claude conversation with a PDF or text file attached | The attachment still shows an omission marker; the export does not fail |
 | Claude unsupported content | Export a Claude conversation containing thinking, tool, file, or attachment blocks | Text exports successfully and each unsupported area receives a visible omission marker and count |
 | Prompt rail | Export a conversation with multiple user prompts | A right-edge rail contains one tick/link per user prompt and links to the correct message |
 | Prompt labels | Include a long prompt and a prompt consisting only of a fenced code block | The long label is collapsed with an ellipsis; code-only prompt becomes `Untitled prompt` |

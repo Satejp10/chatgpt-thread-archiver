@@ -1,28 +1,14 @@
-// ==UserScript==
-// @name         Claude Attachment Probe (temporary diagnostic)
-// @namespace    https://github.com/Satejp10/chatgpt-thread-archiver
-// @version      0.1.2
-// @description  One-off diagnostic. Reports ONLY structural field names, value types, and redacted route shapes for Claude attachments, so image-upload support can be built against the real payload instead of a guess. Never outputs prompts, file names, image bytes, full URLs, or conversation text.
-// @match        https://claude.ai/*
-// @run-at       document-idle
-// @grant        none
-// ==/UserScript==
-
 /*
- * TEMPORARY DIAGNOSTIC — NOT PART OF THE SHIPPING EXPORTER.
+ * TEMPORARY DIAGNOSTIC — console paste version. NOT part of the shipping exporter.
  *
- * Why it exists:  the exporter embeds images on ChatGPT but not on Claude, because
- *                 Claude image support was never built. Claude's conversation API is
- *                 undocumented, so the field that carries a fetchable image URL is
- *                 unknown. This probe reports that shape without exposing content.
- *
- * What it reads:  the same signed-in conversation record the exporter already reads,
- *                 plus one HEAD-style request per distinct attachment URL to learn
- *                 whether the bytes are reachable same-origin.
+ * Same job and same privacy boundary as claude-attachment-probe.user.js, without
+ * Tampermonkey: open a Claude conversation that has an uploaded image, open the
+ * browser console, paste this whole file, press Enter. The report is printed and
+ * copied to the clipboard.
  *
  * What it prints: field NAMES, value TYPES, redacted route shapes such as
- *                 /api/<id:36>/files/<id:36>/preview, HTTP status categories, and
- *                 whether a response's content type is an image.
+ *                 (same-origin) /api/<id:36>/files/<id:36>/preview, HTTP status
+ *                 categories, and whether a response's content type is an image.
  *
  * What it never prints: prompts, message text, file names, image bytes, full or
  *                 signed URLs, query-string values, conversation IDs, organization
@@ -31,7 +17,7 @@
  * Delete this file once the question is answered.
  */
 
-(() => {
+(async () => {
   'use strict';
 
   const MAX_ATTACHMENTS = 10;
@@ -40,9 +26,6 @@
 
   const isObj = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-  // A path segment is kept only when it is a short, non-identifier-looking word such as
-  // "api", "files" or "preview". Anything long, or carrying digits mixed with letters,
-  // is an identifier and is reduced to its length.
   function redactSegment(segment) {
     if (!segment) return segment;
     if (segment.length > 24) return `<id:${segment.length}>`;
@@ -52,8 +35,6 @@
     return /^[a-z0-9_.-]+$/i.test(segment) ? segment : `<seg:${segment.length}>`;
   }
 
-  // Query values are never printed. Parameter names are, and only when they are short
-  // and identifier-shaped — a signed URL's signature lives in the value, not the name.
   function routeShape(rawUrl) {
     let parsed;
     try {
@@ -86,14 +67,12 @@
     if (type === 'boolean' || type === 'number') return `${type}:${value}`;
     if (type !== 'string') return type;
     const trimmed = value.trim();
-    // Route shapes are the point of this probe, so a URL-ish field is shown redacted.
     if (URLISH_KEY_RE.test(key) || /^https?:\/\//i.test(trimmed) || trimmed.startsWith('/api/')) {
       return `URL -> ${routeShape(trimmed)}`;
     }
     if (/^[a-z]+\/[a-z0-9.+-]+$/i.test(trimmed)) return `mime:"${trimmed}"`;
     if (NAMEISH_KEY_RE.test(key)) return `string(len=${value.length})`;
     if (ID_VALUE_RE.test(trimmed)) return `<id:${trimmed.length}>`;
-    // A short, plain token (a MIME type, a "file_kind", an extension) is safe to show.
     if (SAFE_TOKEN_RE.test(trimmed) && !/\s/.test(trimmed)) return `string:"${trimmed}"`;
     return `string(len=${value.length})`;
   }
@@ -127,9 +106,15 @@
     return raw ? decodeURIComponent(raw.slice(prefix.length)) : null;
   }
 
+  // The console version is deliberately forgiving about the route: it takes the last
+  // UUID-shaped path segment, so it still works if Claude moves conversations off
+  // /chat/<id>. The userscript's strict route check is what kept the button hidden.
   function conversationId() {
     const parts = location.pathname.split('/').filter(Boolean);
-    return parts[0] === 'chat' ? parts[1] || null : null;
+    for (const part of [...parts].reverse()) {
+      if (/^[A-Za-z0-9_-]{16,120}$/.test(part)) return part;
+    }
+    return null;
   }
 
   async function conversation(org, id) {
@@ -151,8 +136,6 @@
     return String(status);
   }
 
-  // Confirms only that the bytes are reachable with the signed-in session and that the
-  // response is an image. The body is never read.
   async function reachability(url) {
     try {
       const res = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
@@ -238,79 +221,22 @@
     return out.join('\n');
   }
 
-  function panel(text) {
-    document.getElementById('claude-probe-panel')?.remove();
-    const box = document.createElement('div');
-    box.id = 'claude-probe-panel';
-    box.style.cssText = 'position:fixed;inset:5% 5% auto 5%;z-index:2147483647;background:#111;color:#eee;border:1px solid #555;border-radius:8px;padding:12px;font:12px/1.4 ui-monospace,monospace;max-height:85vh;display:flex;flex-direction:column;gap:8px;box-shadow:0 8px 32px rgba(0,0,0,.5)';
-    const area = document.createElement('textarea');
-    area.readOnly = true;
-    area.value = text;
-    area.style.cssText = 'flex:1;min-height:50vh;width:100%;background:#000;color:#0f0;border:1px solid #333;border-radius:4px;padding:8px;font:12px/1.4 ui-monospace,monospace;resize:vertical';
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:8px';
-    const copy = document.createElement('button');
-    copy.textContent = 'Copy';
-    const close = document.createElement('button');
-    close.textContent = 'Close';
-    for (const button of [copy, close]) button.style.cssText = 'padding:6px 14px;cursor:pointer;border-radius:4px;border:1px solid #666;background:#222;color:#eee';
-    copy.onclick = () => { area.select(); navigator.clipboard?.writeText(area.value); copy.textContent = 'Copied'; };
-    close.onclick = () => box.remove();
-    row.append(copy, close);
-    box.append(area, row);
-    document.body.appendChild(box);
+  let report;
+  try {
+    const org = organizationId();
+    if (!org) throw new Error('no lastActiveOrg cookie — sign in and reload');
+    const id = conversationId();
+    if (!id) throw new Error('no conversation ID in this URL');
+    report = await probe(await conversation(org, id));
+  } catch (error) {
+    report = `PROBE FAILED: ${error.message}`;
   }
 
-  const BUTTON_ID = 'claude-probe-button';
-  const LABEL = 'Claude attachment probe';
-
-  function makeButton() {
-    const button = document.createElement('button');
-    button.id = BUTTON_ID;
-    button.type = 'button';
-    button.textContent = LABEL;
-    button.style.cssText = 'position:fixed;bottom:64px;right:16px;z-index:2147483646;padding:8px 14px;border-radius:6px;border:1px solid #666;background:#222;color:#eee;font:13px system-ui;cursor:pointer';
-    button.addEventListener('click', async () => {
-      button.disabled = true;
-      button.textContent = 'Reading…';
-      try {
-        const org = organizationId();
-        if (!org) throw new Error('no lastActiveOrg cookie — sign in and reload');
-        const id = conversationId();
-        if (!id) throw new Error('no conversation ID in this URL');
-        panel(await probe(await conversation(org, id)));
-      } catch (error) {
-        panel(`PROBE FAILED: ${error.message}`);
-      } finally {
-        button.disabled = false;
-        button.textContent = LABEL;
-      }
-    });
-    return button;
+  console.log(report);
+  try {
+    await navigator.clipboard?.writeText(report);
+    console.log('\n(copied to clipboard)');
+  } catch {
+    console.log('\n(clipboard blocked — select the text above and copy it)');
   }
-
-  // claude.ai is a single-page app: a client-side navigation never re-runs a userscript,
-  // and a React re-render can drop a node appended to body. The shipping exporter
-  // reinstalls its control on every DOM mutation for exactly this reason, and the probe
-  // has to do the same or it simply never appears.
-  function install() {
-    const onConversation = conversationId() !== null;
-    const existing = document.getElementById(BUTTON_ID);
-    if (!onConversation) {
-      existing?.remove();
-      return;
-    }
-    if (existing || !document.body) return;
-    document.body.appendChild(makeButton());
-  }
-
-  function boot() {
-    if (!document.body) return window.setTimeout(boot, 50);
-    install();
-    if (window.MutationObserver && document.documentElement) {
-      new MutationObserver(() => install()).observe(document.documentElement, { childList: true, subtree: true });
-    }
-  }
-
-  boot();
 })();

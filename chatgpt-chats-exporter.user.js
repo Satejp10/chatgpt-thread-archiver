@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.12.0
+// @version      0.13.0
 // @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, uncapped image selection, optional image-model labels, and safe local statistics.
 // @match        https://chatgpt.com/c/*
 // @match        https://chatgpt.com/s/*
@@ -13,7 +13,7 @@
 
 (() => {
 'use strict';
-const ARCHIVER_VERSION = '0.12.0';
+const ARCHIVER_VERSION = '0.13.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -877,7 +877,7 @@ function renderConversationHtml(conversation, { exportedAt = new Date().toISOStr
     : branchCount > 1
       ? `All ${provider} conversation branches exported.`
       : conversation.activeBranch
-        ? (availableBranchCount > 1 ? `Active ${provider} conversation branch exported; ${availableBranchCount - 1} alternate branch${availableBranchCount === 2 ? '' : 'es'} available.` : `Active ${provider} conversation branch exported.`)
+        ? (availableBranchCount > 1 ? `Active ${provider} conversation branch exported; ${availableBranchCount - 1} alternate branch${availableBranchCount === 2 ? '' : 'es'} available (edited prompts or regenerated replies).` : `Active ${provider} conversation branch exported.`)
         : `${provider} message array exported.`;
   const rawTitle = includeTitle ? conversation.title : `${provider} conversation`;
   const title = escapeHtml(rawTitle);
@@ -895,6 +895,13 @@ function renderConversationHtml(conversation, { exportedAt = new Date().toISOStr
     : '';
   const coverageLine = (conversation.stats.droppedNodeCount ?? 0) > 0 || (conversation.stats.duplicateMessageCount ?? 0) > 0
     ? `<p class="meta flag-warn">Coverage: ${conversation.stats.droppedNodeCount ?? 0} dropped node${conversation.stats.droppedNodeCount === 1 ? '' : 's'}, ${conversation.stats.duplicateMessageCount ?? 0} duplicate message${conversation.stats.duplicateMessageCount === 1 ? '' : 's'} removed</p>`
+    : '';
+  // Messages on branches this export did not take are withheld by choice, not lost, so
+  // they get a neutral line rather than the coverage warning. An export that already
+  // carries every branch is withholding nothing, whatever the source count says.
+  const withheldCount = !useLocalTree && branchCount === 1 ? (conversation.stats.alternateBranchMessageCount ?? 0) : 0;
+  const alternateLine = withheldCount > 0
+    ? `<p class="meta">Not exported: ${withheldCount} message${withheldCount === 1 ? '' : 's'} on ${availableBranchCount - 1} other branch${availableBranchCount === 2 ? '' : 'es'}. Re-export with &quot;Include edited and regenerated branches&quot; to keep them.</p>`
     : '';
   const hiddenLine = (conversation.stats.hiddenMessageCount ?? 0) > 0
     ? `<p class="meta flag-warn">${conversation.stats.hiddenMessageCount} message${conversation.stats.hiddenMessageCount === 1 ? '' : 's'} marked hidden by ${escapeHtml(provider)}; included unchanged</p>`
@@ -926,6 +933,7 @@ ${idMeta}
   ${omissionLine}
   ${imageLine}
   ${coverageLine}
+  ${alternateLine}
   ${hiddenLine}
   ${branchNavigator}
 </header>
@@ -1726,7 +1734,11 @@ function normalizeClaudeConversation(raw, conversationId = null) {
       ...branches[0]?.stats,
       messageCount: uniqueMessages.length,
       sourceNodeCount: allCount,
-      droppedNodeCount: ordered.activeBranch ? Math.max(0, allCount - ordered.messages.length) : 0,
+      // Every Claude node is a real message, so nothing is structurally dropped here.
+      // Messages sitting on branches this export did not take are reported separately:
+      // they are withheld by choice, not lost.
+      droppedNodeCount: 0,
+      alternateBranchMessageCount: ordered.activeBranch ? Math.max(0, allCount - ordered.messages.length) : 0,
       duplicateMessageCount: branches[0]?.stats?.duplicateMessageCount ?? 0,
       hiddenMessageCount: uniqueMessages.filter((message) => message.hidden).length,
       branchCount: branches.length,
@@ -2077,6 +2089,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
   const STYLE_ID = 'chatgpt-chats-exporter-style';
   const PREF_KEY = 'chatgpt-thread-archiver-prefs';
   const LEGACY_PREF_KEY = 'chatgpt-chats-exporter-prefs';
+  const PREFS_VERSION = 1;
 
   function addStyles() {
     if (document.getElementById(STYLE_ID)) return;
@@ -2154,7 +2167,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
   }
 
   function defaultPrefs() {
-    return { url: true, title: true, conversationId: false, imageMode: 'all', messageModels: true, branchMode: 'active' };
+    return { url: true, title: true, conversationId: false, imageMode: 'all', messageModels: true, branchMode: 'all', prefsVersion: PREFS_VERSION };
   }
 
   function parsePrefs(raw) {
@@ -2166,7 +2179,8 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
       const imageMode = ['all', 'none', 'choose'].includes(value.imageMode) ? value.imageMode : 'all';
       const messageModels = typeof value.messageModels === 'boolean' ? value.messageModels : true;
       const branchMode = ['active', 'all'].includes(value.branchMode) ? value.branchMode : 'active';
-      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode, messageModels, branchMode };
+      const prefsVersion = Number.isInteger(value.prefsVersion) ? value.prefsVersion : 0;
+      return { url: value.url, title: value.title, conversationId: value.conversationId, imageMode, messageModels, branchMode, prefsVersion };
     } catch {
       return null;
     }
@@ -2196,6 +2210,14 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
     try {
       const stored = parsePrefs(localStorage.getItem(PREF_KEY)) ?? parsePrefs(localStorage.getItem(LEGACY_PREF_KEY));
       if (stored) Object.assign(prefs, stored);
+      // Installs saved before v0.13.0 kept the old current-branch-only default, which
+      // silently dropped edited and regenerated versions. Move them to the new default
+      // once; a choice saved after the upgrade carries PREFS_VERSION and is left alone.
+      if (prefs.prefsVersion < PREFS_VERSION) {
+        prefs.branchMode = 'all';
+        prefs.prefsVersion = PREFS_VERSION;
+        savePrefs(prefs);
+      }
     } catch {
       // Defaults remain active when storage is unavailable or malformed.
     }
@@ -2211,6 +2233,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
         imageMode: ['all', 'none', 'choose'].includes(prefs.imageMode) ? prefs.imageMode : 'all',
         messageModels: prefs.messageModels !== false,
         branchMode: ['active', 'all'].includes(prefs.branchMode) ? prefs.branchMode : 'active',
+        prefsVersion: PREFS_VERSION,
       }));
     } catch {
       // Preference persistence is optional and must never block an export.
@@ -2390,7 +2413,7 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
     const branchLegend = document.createElement('legend');
     branchLegend.textContent = 'Conversation branches';
     branchFieldset.appendChild(branchLegend);
-    for (const choice of [['active', 'Export current branch only'], ['all', 'Include edited and regenerated branches']]) {
+    for (const choice of [['all', 'Include edited and regenerated branches'], ['active', 'Export current branch only']]) {
       const branchRadio = radio('cge-branch-mode', `cge-branch-mode-${choice[0]}`, choice[1], choice[0], prefs.branchMode === choice[0]);
       branchChoices.push(branchRadio.input);
       branchFieldset.appendChild(branchRadio.wrapper);

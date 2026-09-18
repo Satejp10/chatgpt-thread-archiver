@@ -302,7 +302,11 @@ export function normalizeClaudeConversation(raw, conversationId = null) {
       ...branches[0]?.stats,
       messageCount: uniqueMessages.length,
       sourceNodeCount: allCount,
-      droppedNodeCount: ordered.activeBranch ? Math.max(0, allCount - ordered.messages.length) : 0,
+      // Every Claude node is a real message, so nothing is structurally dropped here.
+      // Messages sitting on branches this export did not take are reported separately:
+      // they are withheld by choice, not lost.
+      droppedNodeCount: 0,
+      alternateBranchMessageCount: ordered.activeBranch ? Math.max(0, allCount - ordered.messages.length) : 0,
       duplicateMessageCount: branches[0]?.stats?.duplicateMessageCount ?? 0,
       hiddenMessageCount: uniqueMessages.filter((message) => message.hidden).length,
       branchCount: branches.length,

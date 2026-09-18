@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
-import { normalizeConversation, renderConversationHtml, sanitizeFilename, textToBlocks, ConversationShapeError, selectConversationBranch, messagesFromBranchTree, discoverImageModelMetadata } from './src/core.mjs';
+import { normalizeConversation, renderConversationHtml, sanitizeFilename, textToBlocks, ConversationShapeError, selectConversationBranch, messagesFromBranchTree, discoverImageModelMetadata, extractTextBlocks } from './src/core.mjs';
 import { ChatGPTClientError, clearAccessTokenCache, describeClientError, endpointCandidates, getAuthContext, getConversationIdFromUrl, isExporterRoute, parseConversationRoute } from './src/chatgpt-client.mjs';
 import { applyImageBudget, candidateDownloadUrl, IMAGE_LIMITS, resolveConversationImages, retryDelayMs } from './src/chatgpt-assets.mjs';
 import { deriveExportStats } from './src/export-stats.mjs';
@@ -47,8 +47,8 @@ assert.match(simpleHtml, /class="copy-btn"/);
 assert.match(simpleHtml, /querySelector\("\.content"\)/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.13\.1"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.13\.1/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.13\.2"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.13\.2/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -197,16 +197,25 @@ assert.equal(retryDelayMs('0.1'), 1000);
 assert.equal(retryDelayMs('9999'), 15000);
 
 const imageConversation = normalizeConversation(await load('image-conversation.json'));
-assert.equal(imageConversation.messages[0].textBlocks[0].type, 'image');
-assert.equal(imageConversation.messages[0].textBlocks[0].asset.width, 2);
-const embeddedImage = imageConversation.messages[0].textBlocks[0];
+// The fixture's parts are image-then-text, the shape ChatGPT sends for an upload.
+// A user's own words are shown first and their attachments after.
+assert.deepEqual(imageConversation.messages[0].textBlocks.map((block) => block.type), ['text', 'image']);
+assert.equal(imageConversation.messages[0].textBlocks[0].text, 'Reference image');
+assert.equal(imageConversation.messages[0].textBlocks[1].asset.width, 2);
+const embeddedImage = imageConversation.messages[0].textBlocks[1];
+// An assistant message keeps provider order: there the text introduces the image below it.
+const assistantImageMessage = { author: { role: 'assistant' }, content: { content_type: 'multimodal_text', parts: [{ content_type: 'image_asset_pointer', asset_pointer: 'file-service://file-assistant', width: 2, height: 2 }, 'Here it is.'] } };
+assert.deepEqual(extractTextBlocks(assistantImageMessage).blocks.map((block) => block.type), ['image', 'text']);
+// A user message with no text keeps its single image; reordering must not drop it.
+const imageOnlyMessage = { author: { role: 'user' }, content: { content_type: 'multimodal_text', parts: [{ content_type: 'image_asset_pointer', asset_pointer: 'file-service://file-only', width: 2, height: 2 }] } };
+assert.deepEqual(extractTextBlocks(imageOnlyMessage).blocks.map((block) => block.type), ['image']);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'embedded', dataUrl: 'data:image/png;base64,iVBORw0KGgo=', byteLength: 8 };
 const embeddedImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.13\.1/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.13\.2/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -512,6 +521,9 @@ assert.equal((staleAllHtml.match(/class="branch-fork"/g) ?? []).length, 2);
 assert.equal((staleAllHtml.match(/class="branch-choice"/g) ?? []).length, 2);
 assert.equal((staleAllHtml.match(/data-branch-position>1\/2/g) ?? []).length, 2);
 assert.match(staleAllHtml, /^\s*<div class="branch-fork" data-fork-id="fork-001">/m);
+// The switcher is above the alternatives it governs, not below them.
+assert.match(staleAllHtml, /<div class="branch-fork" data-fork-id="fork-001"><div class="branch-choice"/);
+assert.doesNotMatch(staleAllHtml, /<\/div><div class="branch-choice" data-fork-id="fork-001"/);
 assert.doesNotMatch(staleAllHtml, /Not exported:/);
 assert.doesNotMatch(staleAllHtml, /dropped node/);
 const staleActiveHtml = renderConversationHtml(staleLeaf, { exportedAt: '2026-09-18T12:58:28.687Z' });
@@ -592,7 +604,7 @@ assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.13\.1/);
+assert.match(buildSource, /@version      0\.13\.2/);
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/c/*'));
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/s/*'));
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/g/*'));

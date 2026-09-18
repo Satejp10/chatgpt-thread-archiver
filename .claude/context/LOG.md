@@ -110,6 +110,20 @@ support work. Established from third-party reporting, not a live response.
 **Learned:** Brightdata MCP needed re-authentication and could not be used this
 session; fell back to normal web search per the owner's stated preference.
 
+**Did (v0.13.2):** Two reading-order corrections from the owner's live test. Each
+version switcher now renders above the alternatives it governs instead of below,
+because two nested forks put both switchers at the foot of the document with
+nothing saying which was which. And an uploaded image now follows the prompt it
+was sent with: ChatGPT emits the upload as a content part ahead of the text, and
+the exporter was copying that order faithfully. User messages only — assistant
+messages keep provider order, where the text introduces the image below it.
+
+**Learned:** ChatGPT image embedding works for both uploaded and generated images
+(owner-confirmed live). Claude embeds neither; it was never built. Claude has no
+image generation, so uploads are the whole of what support would mean there.
+
+**Learned:** Brightdata MCP recovered later the same day and worked normally.
+
 **Open:** Claude uploaded images and attachments are still not embedded — they
 render as `[non-text content omitted: Claude attachment or file content]`. Image
 embedding is ChatGPT-only; supporting Claude needs a scope decision and one live

@@ -2,7 +2,19 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
-## [0.13.1] — candidate
+## [0.13.2] — candidate
+
+### Changed
+
+A version switcher now sits **above** the alternatives it governs rather than below them. With two nested forks — an edited prompt containing a regenerated reply — both switchers previously landed at the foot of the document, one under the other, with nothing to say which controlled which. Placed above, each switcher reads as the header of the block it belongs to.
+
+An uploaded image now appears **after** the prompt it was sent with, not before it. ChatGPT emits an upload as a content part ahead of the message text, so a faithful copy read image-then-prompt. User messages now show the person's own words first and their attachments after. Assistant messages keep provider order, where the text introduces the image that follows it.
+
+### Notes
+
+Claude uploads are still not embedded — they remain `[non-text content omitted: Claude attachment or file content]` markers. Image embedding is ChatGPT-only. Claude has no image generation, so uploads are the whole of what support would mean there; it is a scoped piece of work, not yet planned.
+
+## [0.13.1] — 2026-09-18
 
 ### Fixed
 

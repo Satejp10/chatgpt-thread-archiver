@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.13.1
+// @version      0.13.2
 // @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, uncapped image selection, optional image-model labels, and safe local statistics.
 // @match        https://chatgpt.com/c/*
 // @match        https://chatgpt.com/s/*
@@ -13,7 +13,7 @@
 
 (() => {
 'use strict';
-const ARCHIVER_VERSION = '0.13.1';
+const ARCHIVER_VERSION = '0.13.2';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -329,6 +329,14 @@ function extractTextBlocks(message) {
 
   if (blocks.length === 0 && candidates.length > 0) {
     return { blocks: [{ type: 'omitted', reason: 'no supported text representation' }], omittedCount: 1 };
+  }
+  // ChatGPT emits an uploaded image as a content part ahead of the text it was sent
+  // with, so a faithful copy reads image-then-prompt. Put the person's own words first
+  // and their attachments after. Assistant messages keep provider order: there the text
+  // usually introduces the image that follows it.
+  if (role === 'user' && blocks.some((block) => block.type === 'image') && blocks.some((block) => block.type !== 'image')) {
+    const ordered = [...blocks.filter((block) => block.type !== 'image'), ...blocks.filter((block) => block.type === 'image')];
+    return { blocks: ordered, omittedCount };
   }
   return { blocks, omittedCount };
 }
@@ -729,7 +737,7 @@ header.export-head { margin-bottom: 24px; }
 	.branch-nav span { color: var(--muted); font-size: .85em; }
 	.branch-option[hidden] { display: none; }
 	.branch-fork { margin: 0 0 20px; }
-	.branch-choice { display: flex; align-items: center; justify-content: center; gap: 10px; margin: -8px 0 20px; }
+	.branch-choice { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 0 0 12px; }
 	.branch-choice button { min-width: 30px; padding: 2px 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px; cursor: pointer; font-size: 18px; line-height: 1; }
 	.branch-choice button:disabled { opacity: .4; cursor: default; }
 	.branch-choice span { color: var(--muted); font-size: .85em; min-width: 30px; text-align: center; }
@@ -847,7 +855,9 @@ function renderBranchTree(tree, activeIds, includeMessageModels, railItems) {
     if (activeIndex < 0) activeIndex = 0;
     const options = children.map((child, index) => `<div class="branch-option" data-fork-id="${forkId}" data-branch-index="${index}"${index === activeIndex ? ' data-active="true"' : ''}>${renderNode(child)}</div>`).join('');
     const controls = `<div class="branch-choice" data-fork-id="${forkId}" data-active-index="${activeIndex}" role="group" aria-label="Conversation alternatives"><button type="button" data-branch-prev aria-label="Previous alternative">‹</button><span data-branch-position>${activeIndex + 1}/${children.length}</span><button type="button" data-branch-next aria-label="Next alternative">›</button></div>`;
-    return `<div class="branch-fork" data-fork-id="${forkId}">${options}${controls}</div>`;
+    // The switcher sits above the alternatives it governs. Below them, two nested forks
+    // put both switchers at the foot of the document with nothing saying which is which.
+    return `<div class="branch-fork" data-fork-id="${forkId}">${controls}${options}</div>`;
   };
   const renderNode = (node) => {
     const id = `m-tree-${String(++state.messageIndex).padStart(4, '0')}`;

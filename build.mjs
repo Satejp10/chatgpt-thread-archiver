@@ -8,7 +8,7 @@ const [core, client, claude, assets, stats, ui] = await Promise.all([
   source('core.mjs'),
   source('chatgpt-client.mjs'),
   source('claude-client.mjs'),
-  source('chatgpt-assets.mjs'),
+  source('assets.mjs'),
   source('export-stats.mjs'),
   readFile(resolve(root, 'src', 'exporter-ui.js'), 'utf8'),
 ]);
@@ -16,7 +16,7 @@ const [core, client, claude, assets, stats, ui] = await Promise.all([
 const banner = `// ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.13.2
+// @version      0.14.0
 // @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, uncapped image selection, optional image-model labels, and safe local statistics.
 // @match        https://chatgpt.com/c/*
 // @match        https://chatgpt.com/s/*

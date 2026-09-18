@@ -1,4 +1,4 @@
-const ARCHIVER_VERSION = '0.13.2';
+const ARCHIVER_VERSION = '0.14.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',

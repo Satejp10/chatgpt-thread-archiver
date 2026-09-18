@@ -131,3 +131,40 @@ check of the attachment payload shape. Reported by the owner 2026-09-18, not yet
 planned. Also still open: the `Image model:` caption decision and the
 `diagnostics/` deletion that depends on it; live acceptance of v0.12.0 and
 v0.13.0.
+
+## 2026-09-18 — v0.14.0: Claude uploaded images
+
+**Shipped:** Claude exports embed uploaded images. Every image attached to a
+Claude prompt used to come out as an omission marker.
+
+**How the field was found:** not guessed. The diagnostic probe ran against a
+live conversation and reported structure only. An uploaded image sits on
+`message.files[]` with `file_kind: "image"`, `preview_url` and `thumbnail_url`,
+both same-origin `/api/<org-id>/files/<file-id>/(preview|thumbnail)` routes that
+return `image/webp` bytes to the signed-in session. `preview_asset` carries the
+dimensions. There is no original-size route: the preview is the largest variant
+Claude stores, so it is what gets embedded. No identifier, file name, URL or
+conversation content from that run was recorded here.
+
+**Design:** the image pipeline was already provider-neutral apart from turning
+one asset into bytes, so that step became an injected `resolveOne` and
+`src/chatgpt-assets.mjs` was renamed `src/assets.mjs`. The Claude path mints no
+bearer token (`requiresAuth: false` — the session cookie carries it) and accepts
+only a `claude.ai` URL matching the confirmed file route. Anything else is
+refused rather than fetched.
+
+**Lesson — the probe cost four rounds before it produced one byte of data.** A
+Tampermonkey button that installed once never appeared on an SPA; fixing the
+install still did not make it appear; a long console paste was truncated by the
+browser at line 101 and ran a fragment. What worked was a ~30-line paste. When a
+diagnostic is the blocker, ship the shortest thing that can possibly run, not the
+most readable one.
+
+**Lesson — test the diagnostic against a mock before shipping it.** Doing so
+caught the probe printing a real file name and a full `file_uuid`, both of which
+it promised never to print.
+
+**Open:** live acceptance of v0.13.x and v0.14.0. Claude PDFs and text
+attachments are still omission markers (unplanned). The `Image model:` caption
+decision still blocks deleting `diagnostics/`; both probes there have now done
+their job.

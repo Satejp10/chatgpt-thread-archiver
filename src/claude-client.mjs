@@ -127,6 +127,30 @@ function omittedBlock(reason) {
   return { type: 'omitted', reason };
 }
 
+function finiteOrNull(value) {
+  return Number.isFinite(value) ? value : null;
+}
+
+// `size_bytes` is the size of the file the person uploaded, not of the preview variant
+// the exporter embeds, so the image chooser's running total reads high for Claude. It is
+// the only size the payload gives before the bytes are fetched.
+function claudeImageBlock(file, previewUrl) {
+  const preview = file?.preview_asset && typeof file.preview_asset === 'object' ? file.preview_asset : {};
+  return {
+    type: 'image',
+    asset: {
+      pointer: previewUrl,
+      mimeType: '',
+      sizeBytes: finiteOrNull(file?.size_bytes),
+      width: finiteOrNull(preview?.image_width),
+      height: finiteOrNull(preview?.image_height),
+      // Claude has no image generation, so every image here is one the person uploaded.
+      generated: false,
+      imageModel: null,
+    },
+  };
+}
+
 function normalizeClaudeMessage(message, index) {
   const sender = String(message?.sender ?? 'unknown').toLowerCase();
   const role = sender === 'human' ? 'user' : sender === 'assistant' ? 'assistant' : 'unknown';
@@ -156,7 +180,16 @@ function normalizeClaudeMessage(message, index) {
     omittedCount += 1;
   }
 
-  if (Array.isArray(message?.files) && message.files.length > 0) {
+  // An uploaded image carries `file_kind: "image"` and a `preview_url` pointing at the
+  // largest variant Claude stores; there is no original-size route in the payload, so the
+  // preview is the best available copy. Anything else attached (a PDF, a text file) still
+  // has no fetchable representation here and stays an omission marker.
+  for (const file of Array.isArray(message?.files) ? message.files : []) {
+    const previewUrl = typeof file?.preview_url === 'string' ? file.preview_url.trim() : '';
+    if (String(file?.file_kind ?? '').toLowerCase() === 'image' && previewUrl) {
+      textBlocks.push(claudeImageBlock(file, previewUrl));
+      continue;
+    }
     textBlocks.push(omittedBlock('Claude attachment or file content'));
     omittedCount += 1;
   }

@@ -47,8 +47,8 @@ assert.match(simpleHtml, /class="copy-btn"/);
 assert.match(simpleHtml, /querySelector\("\.content"\)/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.14\.0"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.14\.0/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.15\.0"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.15\.0/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -215,7 +215,7 @@ assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.14\.0/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.15\.0/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -449,7 +449,10 @@ assert.equal(claude.activeBranch, true);
 assert.deepEqual(claude.messages.map((message) => message.id), ['claude-root', 'claude-a1', 'claude-a2']);
 assert.equal(claude.messages[0].role, 'user');
 assert.equal(claude.messages[1].role, 'assistant');
-assert.equal(claude.messages[1].textBlocks[0].text, 'Here is the plan.\n\n```text\nstep one\n```');
+// Thinking and tool blocks are now captured rather than dropped, so they sit in the
+// block list ahead of the text they preceded in the payload.
+assert.deepEqual(claude.messages[1].textBlocks.map((block) => block.type), ['thinking', 'text', 'tool_use']);
+assert.equal(claude.messages[1].textBlocks[1].text, 'Here is the plan.\n\n```text\nstep one\n```');
 assert.match(renderConversationHtml(claude, { exportedAt: '2026-08-22T00:00:00.000Z' }), /Claude text test/);
 assert.match(renderConversationHtml(claude, { exportedAt: '2026-08-22T00:00:00.000Z' }), /Model: claude-sonnet-4-20250514/);
 assert.match(renderConversationHtml(claude, { exportedAt: '2026-08-22T00:00:00.000Z' }), /3 messages \(2 You, 1 Claude\)/);
@@ -462,7 +465,13 @@ assert.match(claudeAllHtml, /All Claude conversation branches exported with loca
 assert.match(claudeAllHtml, /4 messages \(2 You, 2 Claude\)/);
 assert.match(claudeAllHtml, /class="branch-fork"/);
 assert.match(claudeAllHtml, /data-branch-position>1\/2/);
-assert.match(renderConversationHtml(claude, { exportedAt: '2026-08-22T00:00:00.000Z' }), /\[non-text content omitted: Claude tool_use content\]/);
+// Captured but excluded by default: nothing is rendered, and the header says how many.
+assert.doesNotMatch(renderConversationHtml(claude, { exportedAt: '2026-08-22T00:00:00.000Z' }), /<details class="thinking-block"|<div class="tool-block"/);
+assert.match(renderConversationHtml(claude, { exportedAt: '2026-08-22T00:00:00.000Z' }), /Not exported: 2 thinking and tool blocks/);
+const claudeThinkingHtml = renderConversationHtml(claude, { exportedAt: '2026-08-22T00:00:00.000Z', includeThinking: true });
+assert.match(claudeThinkingHtml, /<details class="thinking-block"><summary>Thought/);
+assert.match(claudeThinkingHtml, /<div class="tool-block">/);
+assert.doesNotMatch(claudeThinkingHtml, /Not exported: \d+ thinking/);
 assert.match(renderConversationHtml(claude, { exportedAt: '2026-08-22T00:00:00.000Z' }), /\[non-text content omitted: Claude attachment or file content\]/);
 assert.doesNotMatch(renderConversationHtml(claude), /private reasoning/);
 assert.doesNotMatch(renderConversationHtml(claude), /This regenerated branch should not be selected/);
@@ -509,6 +518,53 @@ assert.equal(noAuthResolved.stats.imageEmbeddedCount, 1);
 assert.match(assetsSource, /requiresAuth = true/);
 assert.match(uiSource, /resolveClaudeConversationImages/);
 
+// Claude thinking and tool blocks (payload shape confirmed live on 2026-09-18).
+const claudeReasoning = normalizeClaudeConversation(await load('claude-reasoning-conversation.json'), 'claude-reasoning-id');
+const reasoningBlocks = claudeReasoning.messages[1].textBlocks;
+assert.deepEqual(reasoningBlocks.map((block) => block.type), ['thinking', 'tool_use', 'tool_result', 'text']);
+// Live payloads send thinking_hidden with an empty thinking string: the summaries are all
+// there is, and the export must not claim it dropped something Claude never sent.
+assert.equal(reasoningBlocks[0].text, '');
+assert.equal(reasoningBlocks[0].withheldByProvider, true);
+assert.equal(reasoningBlocks[0].summaries.length, 2);
+assert.equal(reasoningBlocks[0].durationMs, 56000);
+assert.equal(reasoningBlocks[1].toolName, 'consensus_search');
+assert.equal(reasoningBlocks[1].integration, 'Consensus');
+assert.deepEqual(reasoningBlocks[1].input, { query: 'effects of sleep on memory consolidation' });
+assert.equal(reasoningBlocks[2].text, 'Study one: consolidation improves with slow-wave sleep.\n\nStudy two: effect size is moderate.');
+assert.equal(reasoningBlocks[2].isError, false);
+// Capturing these blocks must not inflate the omitted-block warning.
+assert.equal(claudeReasoning.messages[1].omittedCount, 0);
+
+const reasoningOff = renderConversationHtml(claudeReasoning, { exportedAt: '2026-09-18T19:00:00.000Z' });
+assert.doesNotMatch(reasoningOff, /<details class="thinking-block"|<div class="tool-block"/);
+assert.doesNotMatch(reasoningOff, /effects of sleep on memory consolidation/);
+assert.doesNotMatch(reasoningOff, /slow-wave sleep/);
+assert.match(reasoningOff, /Not exported: 3 thinking and tool blocks/);
+
+const reasoningOn = renderConversationHtml(claudeReasoning, { exportedAt: '2026-09-18T19:00:00.000Z', includeThinking: true });
+assert.match(reasoningOn, /<summary>Thought for 56s<\/summary>/);
+assert.match(reasoningOn, /Drafting a concise answer with a practical tip\./);
+assert.match(reasoningOn, /Full reasoning text is not provided by Claude/);
+assert.match(reasoningOn, /Consensus · consensus_search · Search/);
+assert.match(reasoningOn, /effects of sleep on memory consolidation/);
+assert.match(reasoningOn, /<summary>Tool result · Consensus · consensus_search for 5s<\/summary>/);
+assert.match(reasoningOn, /slow-wave sleep/);
+// display_content duplicates the content array; carrying both would double the file.
+assert.doesNotMatch(reasoningOn, /not read by the exporter/);
+// A tool id is provider plumbing, not conversation content, and is never rendered.
+assert.doesNotMatch(reasoningOn, /toolu_01ABCDEF/);
+
+const reasoningAll = renderConversationHtml(
+  { ...claudeReasoning, stats: deriveExportStats(messagesFromBranchTree(claudeReasoning.branchTree), claudeReasoning.stats, { model: claudeReasoning.model }) },
+  { includeAllBranches: true, includeThinking: true },
+);
+// A payload that does carry reasoning text renders it instead of the summary list.
+assert.match(reasoningAll, /A payload that does carry the reasoning text should render it\./);
+assert.match(reasoningAll, /Claude stopped this reasoning early\./);
+assert.match(reasoningAll, /tool-block tool-error/);
+assert.match(reasoningAll, /Tool error · failing_tool/);
+
 const nestedBranches = normalizeConversation(await load('nested-branches.json'));
 assert.equal(nestedBranches.branches.length, 4);
 assert.equal(messagesFromBranchTree(nestedBranches.branchTree).length, 7);
@@ -542,7 +598,11 @@ await assert.rejects(() => fetchClaudeConversation('aaaaaaaa-aaaa-4aaa-8aaa-aaaa
 assert.match(claudeSource, /lastActiveOrg/);
 assert.match(claudeSource, /render_all_tools=true/);
 assert.match(claudeSource, /current_leaf_message_uuid/);
-assert.match(claudeSource, /type === 'thinking' \|\| block\.type === 'tool_result'/);
+// Thinking and tool blocks must be normalized, never silently skipped as they once were.
+assert.match(claudeSource, /claudeThinkingBlock\(block\)/);
+assert.match(claudeSource, /claudeToolUseBlock\(block\)/);
+assert.match(claudeSource, /claudeToolResultBlock\(block\)/);
+assert.doesNotMatch(claudeSource, /block\.type === 'thinking' \|\| block\.type === 'tool_result'/);
 assert.match(claudeSource, /provider: 'Claude'/);
 
 // A Claude chat whose server-side current-branch pointer lags the screen: the leaf
@@ -578,7 +638,12 @@ assert.match(staleActiveHtml, /2 alternate branches available \(edited prompts o
 
 // Every version is captured unless the owner deliberately narrows the export.
 assert.match(uiSource, /const PREFS_VERSION = 1;/);
-assert.match(uiSource, /branchMode: 'all', prefsVersion: PREFS_VERSION/);
+assert.match(uiSource, /branchMode: 'all', thinking: false, prefsVersion: PREFS_VERSION/);
+// Reasoning must be opt-in: only a literal true in stored preferences turns it on, so an
+// older saved preference cannot opt someone in to sharing it.
+assert.match(uiSource, /const thinking = value\.thinking === true;/);
+assert.match(uiSource, /includeThinking: prefs\.thinking === true/);
+assert.match(uiSource, /Include Claude thinking and tool calls/);
 assert.match(uiSource, /if \(prefs\.prefsVersion < PREFS_VERSION\) \{/);
 assert.match(uiSource, /\['all', 'Include edited and regenerated branches'\], \['active', 'Export current branch only'\]/);
 
@@ -647,7 +712,7 @@ assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.14\.0/);
+assert.match(buildSource, /@version      0\.15\.0/);
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/c/*'));
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/s/*'));
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/g/*'));

@@ -2,7 +2,27 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
-## [0.14.0] — candidate
+## [0.15.0] — candidate
+
+### Added
+
+**Claude exports can now carry reasoning summaries and tool calls.** Until now `thinking` and `tool_result` blocks were dropped outright and `tool_use` became an omission marker, so an agentic conversation exported as a series of answers with no account of how they were reached.
+
+They are **off by default**. A new preference, *Include Claude thinking and tool calls (collapsed in the file)*, turns them on. Reasoning is the most sensitive material in a conversation and exports get shared, so only a literal `true` in stored preferences enables it — a preference saved before this release cannot opt anyone in. When excluded, the header carries one neutral line naming the count rather than a marker per block.
+
+In the file each block is a `<details>` element, closed on load: `Thought for 56s` over the summary lines, and `Tool result · Consensus · consensus_search` over the returned text. A tool call shows its name, connector and input inline; the result is what hides. `<details>` needs no script, so the restrictive CSP and offline behaviour are unchanged.
+
+### Fixed
+
+The image preferences were still gated to ChatGPT in the options dialog, so a Claude user could not reach *Exclude all images* or the per-image chooser — even though 0.14.0 made the export path itself provider-neutral and said so. The fieldset now shows for both providers.
+
+### Notes
+
+**Claude does not send the raw reasoning text.** Confirmed against a live conversation: every thinking block arrives with `thinking_hidden: true` and an empty `thinking` string. The summary lines and the timestamps are the whole of what any export can carry. The exporter still renders `thinking` when a payload does provide it.
+
+A tool result's `display_content.json_block` duplicates its `content[]` array; it is deliberately not carried, because including both would roughly double an export for no added information. Local statistics still count text and code blocks only, so tool output does not inflate the word count.
+
+## [0.14.0] — 2026-09-18
 
 ### Added
 

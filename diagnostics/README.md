@@ -129,3 +129,38 @@ node appended to `body`. A probe that installs once simply never appears.
 ### Afterwards
 
 Delete this directory once both questions are answered.
+
+## `claude-thinking-probe.js`
+
+Answers one question: **what does Claude's payload carry for a thinking block and for a
+tool call, and which of it is safe to render?**
+
+Claude exports drop `thinking` and `tool_result` blocks entirely today and reduce
+`tool_use` to an omission marker. Rendering them means knowing the real field names, and
+the API is undocumented, so this probe reports them rather than guessing.
+
+### Privacy boundary
+
+Stricter than the attachment probes, because reasoning text and tool inputs are the most
+sensitive content in a conversation:
+
+- A **tool name** is printed. It is structural — which tool ran — and the point of the
+  exercise. The allow-list is explicit (`type`, `name`, `file_kind`, `stop_reason` and a
+  few siblings); a value is printed only when its key is on that list.
+- Everything a tool was **given or returned**, and every word of reasoning, is reported as
+  `string(len=N)`. That covers `thinking`, `summary`, `input`, `content`, `query`,
+  `command`, `result` and their relatives.
+- Any key ending `id` or `uuid`, and any uuid- or hex-shaped value, becomes `<id:N>`.
+- URLs become redacted route shapes.
+
+At most two blocks of each type are shaped, so a long conversation does not produce a
+long report.
+
+### Use
+
+Open a Claude conversation with **complex reasoning and at least one tool call**, open the
+browser console, paste the whole file, press Enter. The report prints and is copied.
+
+### Afterwards
+
+Delete with the rest of this directory.

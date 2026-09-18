@@ -1,0 +1,95 @@
+{
+  "name": "Claude reasoning and tools",
+  "model": "claude-opus-4-5",
+  "current_leaf_message_uuid": "reason-reply-1",
+  "chat_messages": [
+    {
+      "uuid": "reason-prompt-1",
+      "parent_message_uuid": null,
+      "index": 0,
+      "sender": "human",
+      "created_at": "2026-09-18T18:30:00.000Z",
+      "content": [
+        { "type": "text", "text": "What does the research say?" }
+      ]
+    },
+    {
+      "uuid": "reason-reply-1",
+      "parent_message_uuid": "reason-prompt-1",
+      "index": 1,
+      "sender": "assistant",
+      "created_at": "2026-09-18T18:31:00.000Z",
+      "content": [
+        {
+          "type": "thinking",
+          "cut_off": false,
+          "hidden": false,
+          "start_timestamp": "2026-09-18T18:30:00.000000Z",
+          "stop_timestamp": "2026-09-18T18:30:56.000000Z",
+          "summaries": [
+            { "summary": "Weighing whether to verify against documentation before answering." },
+            { "summary": "Drafting a concise answer with a practical tip." }
+          ],
+          "thinking": "",
+          "thinking_hidden": true,
+          "truncated": false
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01ABCDEFabcdef0123456789ab",
+          "name": "consensus_search",
+          "integration_name": "Consensus",
+          "is_mcp_app": false,
+          "mcp_server_url": "https://mcp.consensus.app/mcp",
+          "message": "Search",
+          "input": { "query": "effects of sleep on memory consolidation" },
+          "start_timestamp": "2026-09-18T18:30:57.000000Z",
+          "stop_timestamp": "2026-09-18T18:31:02.000000Z"
+        },
+        {
+          "type": "tool_result",
+          "name": "consensus_search",
+          "integration_name": "Consensus",
+          "tool_use_id": "toolu_01ABCDEFabcdef0123456789ab",
+          "is_error": false,
+          "content": [
+            { "type": "text", "text": "Study one: consolidation improves with slow-wave sleep.", "uuid": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" },
+            { "type": "text", "text": "Study two: effect size is moderate.", "uuid": "aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff" }
+          ],
+          "display_content": { "type": "json_block", "json_block": "{\"duplicate\": \"of the content array, and not read by the exporter\"}" },
+          "mcp_server_url": "https://mcp.consensus.app/mcp",
+          "start_timestamp": "2026-09-18T18:30:57.000000Z",
+          "stop_timestamp": "2026-09-18T18:31:02.000000Z"
+        },
+        { "type": "text", "text": "Sleep supports memory consolidation." }
+      ]
+    },
+    {
+      "uuid": "reason-reply-2",
+      "parent_message_uuid": "reason-prompt-1",
+      "index": 2,
+      "sender": "assistant",
+      "created_at": "2026-09-18T18:32:00.000Z",
+      "content": [
+        {
+          "type": "thinking",
+          "cut_off": true,
+          "start_timestamp": "2026-09-18T18:32:00.000000Z",
+          "stop_timestamp": "2026-09-18T18:34:05.000000Z",
+          "summaries": [],
+          "thinking": "A payload that does carry the reasoning text should render it.",
+          "thinking_hidden": false,
+          "truncated": false
+        },
+        {
+          "type": "tool_result",
+          "name": "failing_tool",
+          "is_error": true,
+          "tool_use_id": "toolu_02",
+          "content": [{ "type": "text", "text": "the tool reported a failure" }]
+        },
+        { "type": "text", "text": "Regenerated answer." }
+      ]
+    }
+  ]
+}

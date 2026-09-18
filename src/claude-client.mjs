@@ -151,6 +151,68 @@ function claudeImageBlock(file, previewUrl) {
   };
 }
 
+function claudeString(value) {
+  return typeof value === 'string' ? value : '';
+}
+
+// Every thinking and tool block carries an ISO start and stop timestamp, which is where
+// Claude's own "Thought for 56s" comes from. Missing or malformed ones give null rather
+// than a fabricated duration.
+function claudeDurationMs(block) {
+  const start = Date.parse(claudeString(block?.start_timestamp));
+  const stop = Date.parse(claudeString(block?.stop_timestamp));
+  return Number.isFinite(start) && Number.isFinite(stop) && stop >= start ? stop - start : null;
+}
+
+// Confirmed live on 2026-09-18: a thinking block arrives with `thinking_hidden: true` and
+// an EMPTY `thinking` string. Claude's server withholds the raw reasoning, so the summary
+// lines are the whole of what any export can carry. `thinking` is still read, because a
+// payload that does carry it should not be thrown away.
+function claudeThinkingBlock(block) {
+  const summaries = (Array.isArray(block?.summaries) ? block.summaries : [])
+    .map((entry) => claudeString(typeof entry === 'string' ? entry : entry?.summary).trim())
+    .filter(Boolean);
+  return {
+    type: 'thinking',
+    summaries,
+    text: claudeString(block?.thinking).trim(),
+    withheldByProvider: Boolean(block?.thinking_hidden),
+    truncated: Boolean(block?.truncated || block?.cut_off),
+    durationMs: claudeDurationMs(block),
+  };
+}
+
+// `name` is the raw tool identifier; `integration_name` names the connector it belongs to
+// ("Consensus"). Both are shown when they differ, because a bare MCP tool name often does
+// not say whose tool it is.
+function claudeToolUseBlock(block) {
+  return {
+    type: 'tool_use',
+    toolName: claudeString(block?.name).trim(),
+    integration: claudeString(block?.integration_name).trim(),
+    status: claudeString(block?.message).trim(),
+    input: block?.input && typeof block.input === 'object' && !Array.isArray(block.input) ? block.input : null,
+    durationMs: claudeDurationMs(block),
+  };
+}
+
+// A result's `content` is an array of text parts; `display_content.json_block` repeats the
+// same payload formatted for Claude's own UI, so it is not read — carrying both would
+// double the size of an export for nothing.
+function claudeToolResultBlock(block) {
+  const parts = (Array.isArray(block?.content) ? block.content : [])
+    .map((entry) => claudeString(typeof entry === 'string' ? entry : entry?.text))
+    .filter((text) => text.trim());
+  return {
+    type: 'tool_result',
+    toolName: claudeString(block?.name).trim(),
+    integration: claudeString(block?.integration_name).trim(),
+    isError: Boolean(block?.is_error),
+    text: parts.join('\n\n'),
+    durationMs: claudeDurationMs(block),
+  };
+}
+
 function normalizeClaudeMessage(message, index) {
   const sender = String(message?.sender ?? 'unknown').toLowerCase();
   const role = sender === 'human' ? 'user' : sender === 'assistant' ? 'assistant' : 'unknown';
@@ -170,7 +232,18 @@ function normalizeClaudeMessage(message, index) {
       omittedCount += 1;
       continue;
     }
-    if (block.type === 'thinking' || block.type === 'tool_result') continue;
+    if (block.type === 'thinking') {
+      textBlocks.push(claudeThinkingBlock(block));
+      continue;
+    }
+    if (block.type === 'tool_use') {
+      textBlocks.push(claudeToolUseBlock(block));
+      continue;
+    }
+    if (block.type === 'tool_result') {
+      textBlocks.push(claudeToolResultBlock(block));
+      continue;
+    }
     if (block.type === 'text' && typeof block.text === 'string') {
       textBlocks.push(textBlock(block.text));
       continue;

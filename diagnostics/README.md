@@ -72,6 +72,10 @@ prints **field names, value types, and redacted route shapes**. Specifically:
   only short, identifier-shaped parameter names survive.
 - A literal string is printed only when it is a short plain token (a MIME type, a
   `file_kind`, an extension). Everything else becomes `string(len=N)`.
+- A name-ish key (`file_name`, `title`, `caption`, `label`) is reported by length only,
+  and a uuid- or hex-shaped value becomes `<id:N>`. Both pass the plain-token test on
+  their own — a file name such as `a.png` and a `file_uuid` were printed in full before
+  this rule, which is the user's content and a private identifier respectively.
 - One request is made per distinct URL to report a status category, content type, and
   size — the response body is never read.
 
@@ -79,7 +83,19 @@ The probe never outputs prompts, message text, file names, image bytes, full or 
 URLs, query-string values, conversation IDs, organization IDs, tokens, cookies, or
 headers. There is no telemetry and no third-party request.
 
-### Use
+### Use — console version (preferred)
+
+`claude-attachment-probe-console.js` is the same probe with the same privacy boundary
+and no install step. Open a Claude conversation with an uploaded image, open the browser
+console, paste the whole file, press Enter. The report prints and is copied to the
+clipboard. Chrome may require typing `allow pasting` in the console once first.
+
+It is the preferred route because it has no install surface to get wrong: the
+userscript's button depends on Tampermonkey matching, injecting, and surviving a React
+re-render, and each of those is a way for it to silently not appear. The console version
+also takes the last id-shaped path segment rather than requiring `/chat/<id>` exactly.
+
+### Use — userscript version
 
 1. Install alongside the exporter in Tampermonkey.
 2. Open a Claude conversation containing an **uploaded image** (a photo or screenshot

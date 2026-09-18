@@ -85,6 +85,13 @@ headers. There is no telemetry and no third-party request.
 
 ### Use — console version (preferred)
 
+`claude-attachment-probe-mini.js` is the compact form: the same probe and the same
+privacy boundary in roughly thirty lines, because a browser console truncated the long
+version mid-paste (`Uncaught SyntaxError: Unexpected end of input`) and ran a fragment.
+Prefer it for any console paste. `claude-attachment-probe-console.js` is the readable
+long form of the identical logic; both were verified to produce the same report against
+the same mock payload.
+
 `claude-attachment-probe-console.js` is the same probe with the same privacy boundary
 and no install step. Open a Claude conversation with an uploaded image, open the browser
 console, paste the whole file, press Enter. The report prints and is copied to the

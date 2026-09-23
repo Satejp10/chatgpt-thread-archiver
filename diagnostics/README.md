@@ -164,3 +164,33 @@ browser console, paste the whole file, press Enter. The report prints and is cop
 ### Afterwards
 
 Delete with the rest of this directory.
+
+## `temporary-chat-probe.js`
+
+Answers one question: **does the API the exporter already reads also serve a ChatGPT
+temporary chat (`chatgpt.com/?temporary-chat=true`) or a Claude incognito chat
+(`claude.ai/new?incognito`)?**
+
+The exporter takes the conversation id from the page URL. A temporary chat may never put
+one there, and a chat kept out of history may not be served by the history API at all.
+Adding these routes without knowing either would ship a button that fails. No public
+source documents the behaviour, so this probe checks it.
+
+### Privacy boundary
+
+It prints the page path with id-shaped segments redacted, query parameter **names**
+(never values), whether an id was found and where, the conversation API's HTTP status,
+a message count, and top-level **boolean** fields whose name mentions temp, incognito,
+ephemeral, history or private. It never prints ids, titles, message text, the session
+token, cookies or URLs. The ChatGPT session token is held in memory for one request, as
+the exporter does. No telemetry, no third-party request.
+
+### Use
+
+Open a temporary (ChatGPT) or incognito (Claude) chat, send one message, wait for the
+reply, then paste the file into the browser console and press Enter. The report prints
+and is copied. Run it once on each site.
+
+### Afterwards
+
+Delete with the rest of this directory.

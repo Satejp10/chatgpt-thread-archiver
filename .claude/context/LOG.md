@@ -199,3 +199,21 @@ the example, not both next to each other.
 **Open:** live acceptance of v0.13.x, v0.14.0 and v0.15.0. Claude PDFs and text
 attachments are still omission markers. Both probes have done their job; deleting
 `diagnostics/` still waits on the `Image model:` decision.
+
+## 2026-09-23 — v0.16.0: temporary and incognito chats
+
+Owner asked for `chatgpt.com/?temporary-chat=true` and `claude.ai/new?incognito`
+and asked to confirm the same API serves them. It could not be confirmed: no
+public source covers it, and a live check needs the owner. A privacy-safe console
+probe (`diagnostics/temporary-chat-probe.js`) went out; the owner chose to ship
+without running it ("if it doesn't work I'll update").
+
+**How it works:** neither address carries a conversation id, so it is read from
+the page's own requests (Resource Timing plus a PerformanceObserver, since the
+timing buffer stops at its limit). Claude accepts only the `/completion` route,
+because sidebar and prefetch requests can carry other chats' ids. Requests before
+the user entered the temporary route are ignored, so in-app navigation from a
+normal chat cannot export the wrong conversation. `@match` stays narrow: two
+query-specific lines, not the whole host.
+
+**Open:** live confirmation that both APIs return temporary chats.

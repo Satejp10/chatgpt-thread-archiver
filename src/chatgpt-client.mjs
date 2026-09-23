@@ -19,7 +19,67 @@ function currentOrigin() {
   return globalThis.location?.origin ?? 'https://chatgpt.com';
 }
 
-export function parseConversationRoute(url = globalThis.location?.href ?? '') {
+const TEMPORARY_ID_RE = /\/backend-api\/conversation\/([A-Za-z0-9_-]{16,100})(?=[/?]|$)/;
+const temporaryState = { key: undefined, since: 0, observed: [], observer: null };
+
+function temporaryWindowStart(key) {
+  // Requests made before the user entered this temporary chat belong to another chat.
+  // The first route the script sees is the page load itself, so nothing precedes it.
+  if (temporaryState.key === undefined) temporaryState.since = 0;
+  else if (temporaryState.key !== key) temporaryState.since = globalThis.performance?.now?.() ?? 0;
+  temporaryState.key = key;
+  return temporaryState.since;
+}
+
+export function installTemporaryChatObserver() {
+  // The resource-timing buffer stops recording once full; an observer does not.
+  if (temporaryState.observer || typeof globalThis.PerformanceObserver !== 'function') return;
+  try {
+    temporaryState.observer = new globalThis.PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) temporaryState.observed.push({ name: entry.name, startTime: entry.startTime });
+      temporaryState.observed.splice(0, Math.max(0, temporaryState.observed.length - 200));
+    });
+    temporaryState.observer.observe({ type: 'resource', buffered: true });
+  } catch {
+    temporaryState.observer = null;
+  }
+}
+
+function latestResourceId(entries, re, since) {
+  let latest = null;
+  for (const entry of entries) {
+    if (!(Number(entry?.startTime) >= since)) continue;
+    let parsed;
+    try {
+      parsed = new URL(String(entry?.name ?? ''), currentOrigin());
+    } catch {
+      continue;
+    }
+    if (parsed.origin !== currentOrigin()) continue;
+    const id = parsed.pathname.match(re)?.[1];
+    if (id && (!latest || entry.startTime >= latest.startTime)) latest = { id, startTime: entry.startTime };
+  }
+  return latest?.id ?? null;
+}
+
+function temporaryConversationId(url, options) {
+  if (options.resourceEntries) return latestResourceId(options.resourceEntries, TEMPORARY_ID_RE, 0);
+  const since = temporaryWindowStart(url);
+  const buffered = globalThis.performance?.getEntriesByType?.('resource') ?? [];
+  return latestResourceId([...buffered, ...temporaryState.observed], TEMPORARY_ID_RE, since);
+}
+
+export function parseConversationRoute(url = globalThis.location?.href ?? '', options = {}) {
+  if (!options.resourceEntries) {
+    // Track every route change, not only temporary ones, so leaving and re-entering a
+    // temporary chat restarts its request window.
+    try {
+      const parsed = new URL(url);
+      if (!(parsed.pathname === '/' && parsed.searchParams.get('temporary-chat') === 'true')) temporaryWindowStart('');
+    } catch {
+      // An invalid URL is reported below.
+    }
+  }
   try {
     const parsed = new URL(url);
     const parts = parsed.pathname.split('/').filter(Boolean);
@@ -48,6 +108,13 @@ export function parseConversationRoute(url = globalThis.location?.href ?? '') {
       };
     }
     if (parts[0] === 'share') return { kind: 'share', conversationId: null, pathname: parsed.pathname, reason: 'share links are not owned conversation routes' };
+    if (parts.length === 0 && parsed.searchParams.get('temporary-chat') === 'true') {
+      // A temporary chat keeps its id out of the address bar. The page's own requests to
+      // the conversation API carry it, so read it from there instead.
+      const conversationId = temporaryConversationId(url, options);
+      if (!conversationId) return { kind: 'temporary-pending', conversationId: null, pathname: parsed.pathname, reason: 'temporary chat has no message yet' };
+      return { kind: 'conversation', conversationId, pathname: parsed.pathname, routeSegment: 'temporary', temporary: true };
+    }
     return { kind: 'not-conversation', conversationId: null, pathname: parsed.pathname, reason: 'no supported conversation route segment' };
   } catch {
     return { kind: 'invalid-url', conversationId: null, pathname: '', reason: 'invalid URL' };

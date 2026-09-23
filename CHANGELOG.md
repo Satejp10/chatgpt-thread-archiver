@@ -2,6 +2,16 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.16.0] — 2026-09-23
+
+### Added
+
+**Temporary and incognito chats.** The exporter now runs on `chatgpt.com/?temporary-chat=true` and `claude.ai/new?incognito`. Neither address carries a conversation id, so the exporter takes it from the page's own requests to the conversation API: on ChatGPT the latest `/backend-api/conversation/<id>` request, on Claude only the send-message request (`…/chat_conversations/<id>/completion`), because other requests on a Claude page can name other conversations. Only requests made after the user entered the temporary chat count, so arriving from a normal chat without a reload cannot pick up the earlier one. The **Export HTML** button appears once the first reply exists.
+
+### Notes
+
+**Shipped untested against live temporary chats, at the owner's call.** Whether ChatGPT's and Claude's conversation APIs serve a chat kept out of history is unconfirmed; no public source documents it. If either returns an error, the export shows it and nothing is written. `diagnostics/temporary-chat-probe.js` answers the question in one console paste if it is needed.
+
 ## [0.15.0] — 2026-09-18
 
 ### Added

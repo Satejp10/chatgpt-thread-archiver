@@ -233,3 +233,8 @@ the likeliest cause of the missing button. Not confirmed live.
 
 **If Claude still fails:** `diagnostics/claude-incognito-route-probe.js` (paste
 before sending) reports the redacted route shapes of every API request.
+
+**Live result (2026-09-23):** owner confirmed v0.16.1 — new chats get the button
+without a reload, and Claude incognito exports. The API question from v0.16.0 is
+answered: both providers' conversation APIs serve temporary chats. Neither probe
+from this round was needed in the end.

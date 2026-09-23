@@ -44,6 +44,8 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Claude non-image attachment | Export a Claude conversation with a PDF or text file attached | The attachment still shows an omission marker; the export does not fail |
 | Claude reasoning off | Export a Claude conversation with thinking and tool calls, box unticked (the default) | No reasoning or tool markup appears; no tool input or output text is anywhere in the file; the header reports how many blocks were not exported |
 | Claude reasoning on | Re-export the same conversation with **Include Claude thinking and tool calls** ticked | Each step shows a collapsed `Thought for Ns` and collapsed tool results; opening them shows the summary lines and the returned text; the file still opens offline |
+| ChatGPT temporary chat | Open `chatgpt.com/?temporary-chat=true`, send a message, wait for the reply, click **Export HTML** | The button appears after the first reply and the export holds that temporary chat, not an earlier one |
+| Claude incognito chat | Open `claude.ai/new?incognito`, send a message, wait for the reply, click **Export HTML** | The button appears after the first reply and the export holds that incognito chat, not an earlier one |
 | Claude image options | Open the export dialog on a Claude conversation | The **Images** choices appear, as they do on ChatGPT |
 | Claude unsupported content | Export a Claude conversation containing thinking, tool, file, or attachment blocks | Text exports successfully and each unsupported area receives a visible omission marker and count |
 | Prompt rail | Export a conversation with multiple user prompts | A right-edge rail contains one tick/link per user prompt and links to the correct message |

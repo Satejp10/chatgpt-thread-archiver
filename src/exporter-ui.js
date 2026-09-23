@@ -535,6 +535,8 @@
 
   function boot() {
     if (!document.body) return window.setTimeout(boot, 50);
+    if (isChatGPTHost()) installTemporaryChatObserver();
+    if (isClaudeHost()) installClaudeIncognitoObserver();
     install();
     if (window.MutationObserver && document.documentElement) {
       const observer = new MutationObserver(() => install());

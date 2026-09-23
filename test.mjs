@@ -47,8 +47,8 @@ assert.match(simpleHtml, /class="copy-btn"/);
 assert.match(simpleHtml, /querySelector\("\.content"\)/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.15\.0"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.15\.0/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.16\.0"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.0/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -215,7 +215,7 @@ assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.15\.0/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.0/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -428,6 +428,27 @@ assert.equal(isExporterRoute('https://chatgpt.com/g/project-123'), false);
 assert.equal(isExporterRoute('https://chatgpt.com/g/g-custom-instructions'), false);
 assert.equal(isExporterRoute('https://chatgpt.com/settings'), false);
 assert.equal(isExporterRoute('https://chat.openai.com/c/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), false);
+
+// ChatGPT temporary chats keep the id out of the address bar; the page's own requests
+// to the conversation API carry it.
+{
+  const tempUrl = 'https://chatgpt.com/?temporary-chat=true';
+  const tempId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const older = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const entries = [
+    { name: `https://chatgpt.com/backend-api/conversation/${older}`, startTime: 5 },
+    { name: `https://chatgpt.com/backend-api/conversation/${tempId}/stream_status`, startTime: 20 },
+    { name: 'https://chatgpt.com/backend-api/f/conversation', startTime: 25 },
+    { name: `https://evil.example/backend-api/conversation/${older}`, startTime: 30 },
+  ];
+  const route = parseConversationRoute(tempUrl, { resourceEntries: entries });
+  assert.equal(route.kind, 'conversation');
+  assert.equal(route.conversationId, tempId, 'the latest same-origin conversation request wins');
+  assert.equal(route.temporary, true);
+  assert.equal(parseConversationRoute(tempUrl, { resourceEntries: [] }).kind, 'temporary-pending');
+  assert.equal(parseConversationRoute('https://chatgpt.com/?temporary-chat=false', { resourceEntries: entries }).kind, 'not-conversation');
+  assert.equal(parseConversationRoute('https://chatgpt.com/c/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa?temporary-chat=true').conversationId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+}
 const validId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 assert.deepEqual(endpointCandidates(validId), [
   `/backend-api/conversation/${validId}`,
@@ -587,6 +608,25 @@ assert.equal(getClaudeConversationIdFromUrl('https://claude.ai/new'), null);
 assert.equal(parseClaudeConversationRoute('https://claude.ai/chat/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa').kind, 'conversation');
 assert.equal(isClaudeExporterRoute('https://claude.ai/chat/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), true);
 assert.equal(isClaudeExporterRoute('https://claude.ai/projects/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), false);
+
+// Claude incognito chats: only the send-message request names the chat for certain.
+{
+  const incognitoUrl = 'https://claude.ai/new?incognito=';
+  const incognitoId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const other = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const org = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+  const entries = [
+    { name: `https://claude.ai/api/organizations/${org}/chat_conversations/${incognitoId}/completion`, startTime: 10 },
+    { name: `https://claude.ai/api/organizations/${org}/chat_conversations/${other}?tree=True`, startTime: 40 },
+  ];
+  const route = parseClaudeConversationRoute(incognitoUrl, { resourceEntries: entries });
+  assert.equal(route.kind, 'conversation');
+  assert.equal(route.conversationId, incognitoId, 'a plain fetch of another conversation is ignored');
+  assert.equal(route.incognito, true);
+  assert.equal(parseClaudeConversationRoute('https://claude.ai/new?incognito', { resourceEntries: entries }).conversationId, incognitoId);
+  assert.equal(parseClaudeConversationRoute(incognitoUrl, { resourceEntries: entries.slice(1) }).kind, 'incognito-pending');
+  assert.equal(parseClaudeConversationRoute('https://claude.ai/new', { resourceEntries: entries }).kind, 'not-conversation');
+}
 assert.equal(claudeConversationPath('org-123', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), '/api/organizations/org-123/chat_conversations/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa?tree=true&rendering_mode=messages&render_all_tools=true');
 assert.equal(claudeConversationPath('', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), null);
 assert.equal(claudeConversationPath('org/123', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), null);
@@ -712,12 +752,16 @@ assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.15\.0/);
+assert.match(buildSource, /@version      0\.16\.0/);
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/c/*'));
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/s/*'));
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/g/*'));
 assert.ok(buildSource.includes('// @match        https://claude.ai/chat/*'));
 assert.ok(!buildSource.includes('// @match        https://chatgpt.com/*'));
+assert.ok(buildSource.includes('// @match        https://chatgpt.com/?temporary-chat=*'));
+assert.ok(buildSource.includes('// @match        https://claude.ai/new?incognito*'));
+assert.ok(!buildSource.includes('// @match        https://claude.ai/*\n'));
+assert.ok(uiSource.includes('installTemporaryChatObserver()') && uiSource.includes('installClaudeIncognitoObserver()'));
 assert.match(buildSource, /source\('claude-client\.mjs'\)/);
 assert.match(buildSource, /source\('assets\.mjs'\)/);
 assert.match(buildSource, /source\('export-stats\.mjs'\)/);

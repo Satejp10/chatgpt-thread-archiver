@@ -1,19 +1,21 @@
 // ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.15.0
+// @version      0.16.0
 // @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, uncapped image selection, optional image-model labels, and safe local statistics.
 // @match        https://chatgpt.com/c/*
 // @match        https://chatgpt.com/s/*
 // @match        https://chatgpt.com/g/*
+// @match        https://chatgpt.com/?temporary-chat=*
 // @match        https://claude.ai/chat/*
+// @match        https://claude.ai/new?incognito*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
 
 (() => {
 'use strict';
-const ARCHIVER_VERSION = '0.15.0';
+const ARCHIVER_VERSION = '0.16.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -1088,7 +1090,67 @@ function currentOrigin() {
   return globalThis.location?.origin ?? 'https://chatgpt.com';
 }
 
-function parseConversationRoute(url = globalThis.location?.href ?? '') {
+const TEMPORARY_ID_RE = /\/backend-api\/conversation\/([A-Za-z0-9_-]{16,100})(?=[/?]|$)/;
+const temporaryState = { key: undefined, since: 0, observed: [], observer: null };
+
+function temporaryWindowStart(key) {
+  // Requests made before the user entered this temporary chat belong to another chat.
+  // The first route the script sees is the page load itself, so nothing precedes it.
+  if (temporaryState.key === undefined) temporaryState.since = 0;
+  else if (temporaryState.key !== key) temporaryState.since = globalThis.performance?.now?.() ?? 0;
+  temporaryState.key = key;
+  return temporaryState.since;
+}
+
+function installTemporaryChatObserver() {
+  // The resource-timing buffer stops recording once full; an observer does not.
+  if (temporaryState.observer || typeof globalThis.PerformanceObserver !== 'function') return;
+  try {
+    temporaryState.observer = new globalThis.PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) temporaryState.observed.push({ name: entry.name, startTime: entry.startTime });
+      temporaryState.observed.splice(0, Math.max(0, temporaryState.observed.length - 200));
+    });
+    temporaryState.observer.observe({ type: 'resource', buffered: true });
+  } catch {
+    temporaryState.observer = null;
+  }
+}
+
+function latestResourceId(entries, re, since) {
+  let latest = null;
+  for (const entry of entries) {
+    if (!(Number(entry?.startTime) >= since)) continue;
+    let parsed;
+    try {
+      parsed = new URL(String(entry?.name ?? ''), currentOrigin());
+    } catch {
+      continue;
+    }
+    if (parsed.origin !== currentOrigin()) continue;
+    const id = parsed.pathname.match(re)?.[1];
+    if (id && (!latest || entry.startTime >= latest.startTime)) latest = { id, startTime: entry.startTime };
+  }
+  return latest?.id ?? null;
+}
+
+function temporaryConversationId(url, options) {
+  if (options.resourceEntries) return latestResourceId(options.resourceEntries, TEMPORARY_ID_RE, 0);
+  const since = temporaryWindowStart(url);
+  const buffered = globalThis.performance?.getEntriesByType?.('resource') ?? [];
+  return latestResourceId([...buffered, ...temporaryState.observed], TEMPORARY_ID_RE, since);
+}
+
+function parseConversationRoute(url = globalThis.location?.href ?? '', options = {}) {
+  if (!options.resourceEntries) {
+    // Track every route change, not only temporary ones, so leaving and re-entering a
+    // temporary chat restarts its request window.
+    try {
+      const parsed = new URL(url);
+      if (!(parsed.pathname === '/' && parsed.searchParams.get('temporary-chat') === 'true')) temporaryWindowStart('');
+    } catch {
+      // An invalid URL is reported below.
+    }
+  }
   try {
     const parsed = new URL(url);
     const parts = parsed.pathname.split('/').filter(Boolean);
@@ -1117,6 +1179,13 @@ function parseConversationRoute(url = globalThis.location?.href ?? '') {
       };
     }
     if (parts[0] === 'share') return { kind: 'share', conversationId: null, pathname: parsed.pathname, reason: 'share links are not owned conversation routes' };
+    if (parts.length === 0 && parsed.searchParams.get('temporary-chat') === 'true') {
+      // A temporary chat keeps its id out of the address bar. The page's own requests to
+      // the conversation API carry it, so read it from there instead.
+      const conversationId = temporaryConversationId(url, options);
+      if (!conversationId) return { kind: 'temporary-pending', conversationId: null, pathname: parsed.pathname, reason: 'temporary chat has no message yet' };
+      return { kind: 'conversation', conversationId, pathname: parsed.pathname, routeSegment: 'temporary', temporary: true };
+    }
     return { kind: 'not-conversation', conversationId: null, pathname: parsed.pathname, reason: 'no supported conversation route segment' };
   } catch {
     return { kind: 'invalid-url', conversationId: null, pathname: '', reason: 'invalid URL' };
@@ -1555,11 +1624,71 @@ function redactClaudeId(value) {
   return text ? `<id:${text.length}>` : '<missing>';
 }
 
-function parseClaudeConversationRoute(url = globalThis.location?.href ?? '') {
+// Only the send-message request names the incognito chat for certain; other requests on
+// the page (sidebar, prefetches) can carry the ids of other conversations.
+const CLAUDE_INCOGNITO_ID_RE = /^\/api\/organizations\/[A-Za-z0-9_-]{1,120}\/chat_conversations\/([A-Za-z0-9_-]{16,120})\/(?:completion|retry_completion)$/;
+const claudeIncognitoState = { key: undefined, since: 0, observed: [], observer: null };
+
+function isClaudeIncognitoUrl(parsed) {
+  return parsed.pathname.replace(/\/$/, '') === '/new' && parsed.searchParams.has('incognito');
+}
+
+function claudeIncognitoWindowStart(key) {
+  // Requests made before the user entered this incognito chat belong to another chat.
+  // The first route the script sees is the page load itself, so nothing precedes it.
+  if (claudeIncognitoState.key === undefined) claudeIncognitoState.since = 0;
+  else if (claudeIncognitoState.key !== key) claudeIncognitoState.since = globalThis.performance?.now?.() ?? 0;
+  claudeIncognitoState.key = key;
+  return claudeIncognitoState.since;
+}
+
+function installClaudeIncognitoObserver() {
+  // The resource-timing buffer stops recording once full; an observer does not.
+  if (claudeIncognitoState.observer || typeof globalThis.PerformanceObserver !== 'function') return;
+  try {
+    claudeIncognitoState.observer = new globalThis.PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) claudeIncognitoState.observed.push({ name: entry.name, startTime: entry.startTime });
+      claudeIncognitoState.observed.splice(0, Math.max(0, claudeIncognitoState.observed.length - 200));
+    });
+    claudeIncognitoState.observer.observe({ type: 'resource', buffered: true });
+  } catch {
+    claudeIncognitoState.observer = null;
+  }
+}
+
+function claudeIncognitoConversationId(url, options) {
+  const since = options.resourceEntries ? 0 : claudeIncognitoWindowStart(url);
+  const entries = options.resourceEntries
+    ?? [...(globalThis.performance?.getEntriesByType?.('resource') ?? []), ...claudeIncognitoState.observed];
+  let latest = null;
+  for (const entry of entries) {
+    if (!(Number(entry?.startTime) >= since)) continue;
+    let parsed;
+    try {
+      parsed = new URL(String(entry?.name ?? ''), currentClaudeOrigin());
+    } catch {
+      continue;
+    }
+    if (parsed.origin !== currentClaudeOrigin()) continue;
+    const id = parsed.pathname.match(CLAUDE_INCOGNITO_ID_RE)?.[1];
+    if (id && (!latest || entry.startTime >= latest.startTime)) latest = { id, startTime: entry.startTime };
+  }
+  return latest?.id ?? null;
+}
+
+function parseClaudeConversationRoute(url = globalThis.location?.href ?? '', options = {}) {
   try {
     const parsed = new URL(url);
     const pathname = parsed.pathname.replace(/\/$/, '');
     if (parsed.hostname !== 'claude.ai') return { kind: 'not-claude', conversationId: null, pathname, reason: 'host is not claude.ai' };
+    if (isClaudeIncognitoUrl(parsed)) {
+      // An incognito chat keeps its id out of the address bar; the page's own request
+      // that sent the message carries it.
+      const conversationId = claudeIncognitoConversationId(url, options);
+      if (!conversationId) return { kind: 'incognito-pending', conversationId: null, pathname, reason: 'incognito chat has no message yet' };
+      return { kind: 'conversation', conversationId, pathname, incognito: true };
+    }
+    if (!options.resourceEntries) claudeIncognitoWindowStart('');
     if (!CLAUDE_ROUTE_RE.test(pathname)) {
       return { kind: 'not-conversation', conversationId: null, pathname, reason: 'path is not a Claude conversation route' };
     }
@@ -2866,6 +2995,8 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
 
   function boot() {
     if (!document.body) return window.setTimeout(boot, 50);
+    if (isChatGPTHost()) installTemporaryChatObserver();
+    if (isClaudeHost()) installClaudeIncognitoObserver();
     install();
     if (window.MutationObserver && document.documentElement) {
       const observer = new MutationObserver(() => install());

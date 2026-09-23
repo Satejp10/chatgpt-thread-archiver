@@ -217,3 +217,19 @@ normal chat cannot export the wrong conversation. `@match` stays narrow: two
 query-specific lines, not the whole host.
 
 **Open:** live confirmation that both APIs return temporary chats.
+
+## 2026-09-23 — v0.16.1: whole-host loading, Claude incognito fix
+
+Owner's live test of v0.16.0: ChatGPT temporary chats work; Claude incognito shows
+no button. Owner also found that a chat started from the home page gets no button
+until a reload, and asked for the script to load on all of chatgpt.com except
+codex, scheduled and library.
+
+**Done:** `@match` is now the two whole hosts (claude.ai too — same fault there);
+the route check decides the button, with ChatGPT's three sections blocked in code
+rather than by `@exclude`, so navigating out of them inside the app still works.
+Claude's request window is keyed on the route type rather than the full address,
+the likeliest cause of the missing button. Not confirmed live.
+
+**If Claude still fails:** `diagnostics/claude-incognito-route-probe.js` (paste
+before sending) reports the redacted route shapes of every API request.

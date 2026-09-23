@@ -19,6 +19,7 @@ function currentOrigin() {
   return globalThis.location?.origin ?? 'https://chatgpt.com';
 }
 
+const EXCLUDED_SECTIONS = new Set(['codex', 'scheduled', 'library']);
 const TEMPORARY_ID_RE = /\/backend-api\/conversation\/([A-Za-z0-9_-]{16,100})(?=[/?]|$)/;
 const temporaryState = { key: undefined, since: 0, observed: [], observer: null };
 
@@ -64,7 +65,9 @@ function latestResourceId(entries, re, since) {
 
 function temporaryConversationId(url, options) {
   if (options.resourceEntries) return latestResourceId(options.resourceEntries, TEMPORARY_ID_RE, 0);
-  const since = temporaryWindowStart(url);
+  // Keyed on the route, not the full address: the app may rewrite the address while the
+  // chat is open, and that must not discard the requests already seen.
+  const since = temporaryWindowStart('temporary');
   const buffered = globalThis.performance?.getEntriesByType?.('resource') ?? [];
   return latestResourceId([...buffered, ...temporaryState.observed], TEMPORARY_ID_RE, since);
 }
@@ -96,6 +99,9 @@ export function parseConversationRoute(url = globalThis.location?.href ?? '', op
         routeSegment: 'g',
       };
     }
+    // The script runs on the whole host so a new chat gets the button without a reload.
+    // These sections are not chats and never show it.
+    if (EXCLUDED_SECTIONS.has(parts[0])) return { kind: 'excluded', conversationId: null, pathname: parsed.pathname, reason: 'section is not a conversation' };
     const routeIndex = parts.findIndex((part) => part === 'c' || part === 's' || part === 'conversation');
     if (routeIndex >= 0) {
       const rawId = parts[routeIndex + 1];

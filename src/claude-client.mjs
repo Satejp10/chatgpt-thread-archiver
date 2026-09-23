@@ -52,7 +52,9 @@ export function installClaudeIncognitoObserver() {
 }
 
 function claudeIncognitoConversationId(url, options) {
-  const since = options.resourceEntries ? 0 : claudeIncognitoWindowStart(url);
+  // Keyed on the route, not the full address: Claude may rewrite the address after the
+  // first message, and that must not discard the request that named the chat.
+  const since = options.resourceEntries ? 0 : claudeIncognitoWindowStart('incognito');
   const entries = options.resourceEntries
     ?? [...(globalThis.performance?.getEntriesByType?.('resource') ?? []), ...claudeIncognitoState.observed];
   let latest = null;

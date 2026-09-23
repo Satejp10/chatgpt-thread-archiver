@@ -1,21 +1,17 @@
 // ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.16.0
+// @version      0.16.1
 // @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, uncapped image selection, optional image-model labels, and safe local statistics.
-// @match        https://chatgpt.com/c/*
-// @match        https://chatgpt.com/s/*
-// @match        https://chatgpt.com/g/*
-// @match        https://chatgpt.com/?temporary-chat=*
-// @match        https://claude.ai/chat/*
-// @match        https://claude.ai/new?incognito*
+// @match        https://chatgpt.com/*
+// @match        https://claude.ai/*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
 
 (() => {
 'use strict';
-const ARCHIVER_VERSION = '0.16.0';
+const ARCHIVER_VERSION = '0.16.1';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -1090,6 +1086,7 @@ function currentOrigin() {
   return globalThis.location?.origin ?? 'https://chatgpt.com';
 }
 
+const EXCLUDED_SECTIONS = new Set(['codex', 'scheduled', 'library']);
 const TEMPORARY_ID_RE = /\/backend-api\/conversation\/([A-Za-z0-9_-]{16,100})(?=[/?]|$)/;
 const temporaryState = { key: undefined, since: 0, observed: [], observer: null };
 
@@ -1135,7 +1132,9 @@ function latestResourceId(entries, re, since) {
 
 function temporaryConversationId(url, options) {
   if (options.resourceEntries) return latestResourceId(options.resourceEntries, TEMPORARY_ID_RE, 0);
-  const since = temporaryWindowStart(url);
+  // Keyed on the route, not the full address: the app may rewrite the address while the
+  // chat is open, and that must not discard the requests already seen.
+  const since = temporaryWindowStart('temporary');
   const buffered = globalThis.performance?.getEntriesByType?.('resource') ?? [];
   return latestResourceId([...buffered, ...temporaryState.observed], TEMPORARY_ID_RE, since);
 }
@@ -1167,6 +1166,9 @@ function parseConversationRoute(url = globalThis.location?.href ?? '', options =
         routeSegment: 'g',
       };
     }
+    // The script runs on the whole host so a new chat gets the button without a reload.
+    // These sections are not chats and never show it.
+    if (EXCLUDED_SECTIONS.has(parts[0])) return { kind: 'excluded', conversationId: null, pathname: parsed.pathname, reason: 'section is not a conversation' };
     const routeIndex = parts.findIndex((part) => part === 'c' || part === 's' || part === 'conversation');
     if (routeIndex >= 0) {
       const rawId = parts[routeIndex + 1];
@@ -1657,7 +1659,9 @@ function installClaudeIncognitoObserver() {
 }
 
 function claudeIncognitoConversationId(url, options) {
-  const since = options.resourceEntries ? 0 : claudeIncognitoWindowStart(url);
+  // Keyed on the route, not the full address: Claude may rewrite the address after the
+  // first message, and that must not discard the request that named the chat.
+  const since = options.resourceEntries ? 0 : claudeIncognitoWindowStart('incognito');
   const entries = options.resourceEntries
     ?? [...(globalThis.performance?.getEntriesByType?.('resource') ?? []), ...claudeIncognitoState.observed];
   let latest = null;

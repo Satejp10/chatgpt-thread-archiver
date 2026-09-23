@@ -47,8 +47,8 @@ assert.match(simpleHtml, /class="copy-btn"/);
 assert.match(simpleHtml, /querySelector\("\.content"\)/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.16\.0"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.0/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.16\.1"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.1/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -215,7 +215,7 @@ assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.0/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.1/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -428,6 +428,11 @@ assert.equal(isExporterRoute('https://chatgpt.com/g/project-123'), false);
 assert.equal(isExporterRoute('https://chatgpt.com/g/g-custom-instructions'), false);
 assert.equal(isExporterRoute('https://chatgpt.com/settings'), false);
 assert.equal(isExporterRoute('https://chat.openai.com/c/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), false);
+for (const section of ['https://chatgpt.com/codex/', 'https://chatgpt.com/codex/tasks/task_e_abcdef0123456789', 'https://chatgpt.com/scheduled', 'https://chatgpt.com/library', 'https://chatgpt.com/library/c/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']) {
+  assert.equal(parseConversationRoute(section).kind, 'excluded', section);
+  assert.equal(isExporterRoute(section), false, section);
+}
+assert.equal(isExporterRoute('https://chatgpt.com/'), false, 'the empty new-chat page shows no button until the chat exists');
 
 // ChatGPT temporary chats keep the id out of the address bar; the page's own requests
 // to the conversation API carry it.
@@ -752,15 +757,12 @@ assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.16\.0/);
-assert.ok(buildSource.includes('// @match        https://chatgpt.com/c/*'));
-assert.ok(buildSource.includes('// @match        https://chatgpt.com/s/*'));
-assert.ok(buildSource.includes('// @match        https://chatgpt.com/g/*'));
-assert.ok(buildSource.includes('// @match        https://claude.ai/chat/*'));
-assert.ok(!buildSource.includes('// @match        https://chatgpt.com/*'));
-assert.ok(buildSource.includes('// @match        https://chatgpt.com/?temporary-chat=*'));
-assert.ok(buildSource.includes('// @match        https://claude.ai/new?incognito*'));
-assert.ok(!buildSource.includes('// @match        https://claude.ai/*\n'));
+assert.match(buildSource, /@version      0\.16\.1/);
+// The script runs on the whole host so a chat started on the home page gets the button
+// without a reload; the route check decides where the button shows.
+assert.ok(buildSource.includes('// @match        https://chatgpt.com/*\n'));
+assert.ok(buildSource.includes('// @match        https://claude.ai/*\n'));
+assert.equal((buildSource.match(/\/\/ @match/g) ?? []).length, 2);
 assert.ok(uiSource.includes('installTemporaryChatObserver()') && uiSource.includes('installClaudeIncognitoObserver()'));
 assert.match(buildSource, /source\('claude-client\.mjs'\)/);
 assert.match(buildSource, /source\('assets\.mjs'\)/);

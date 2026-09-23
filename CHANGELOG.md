@@ -2,6 +2,14 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.16.1] — 2026-09-23
+
+### Fixed
+
+**A chat started from the home page now gets the button without a reload.** The script loads on all of `chatgpt.com` and `claude.ai`; the button still shows only when a conversation exists, and never in ChatGPT's `codex`, `scheduled` or `library` sections.
+
+**Claude incognito chats showed no button.** The request window was keyed on the full address, so an address rewrite after the first message discarded the request naming the chat. It is now keyed on the route type. Unconfirmed live; `diagnostics/claude-incognito-route-probe.js` shows which request names the chat if it still fails.
+
 ## [0.16.0] — 2026-09-23
 
 ### Added

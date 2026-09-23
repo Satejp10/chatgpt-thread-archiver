@@ -194,3 +194,11 @@ and is copied. Run it once on each site.
 ### Afterwards
 
 Delete with the rest of this directory.
+
+## `claude-incognito-route-probe.js`
+
+Answers one question: **which request on a Claude incognito page names the chat?** Only
+needed if v0.16.1 still shows no button there. Paste it on a fresh `claude.ai/new?incognito`
+page, then send a message; the report prints 45 seconds after pasting. It lists same-origin
+`/api/` request paths with every id-like segment replaced by `<id>` and query parameter
+names only. No ids, text, tokens or cookies. Delete with the rest of this directory.

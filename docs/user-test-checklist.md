@@ -90,6 +90,11 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Mobile width | Open the exported file below 700 px viewport width | The rail is hidden and the transcript uses the full available width |
 | Mobile export control | Open a live `/c/...` chat on Edge Android or another mobile browser extension runner | The Export HTML button and status panel sit above the composer/send area and do not block the send control |
 | Offline output | Open the downloaded HTML with network access disabled or DevTools Network visible | The file remains readable, embedded images remain visible, and it issues zero network requests |
+| Dialog controls on ChatGPT (v0.16.2) | On `chatgpt.com`, click **Export HTML** | Every option shows a visible checkbox or radio button, in the site's light or dark theme |
+| Switching chats without a reload (v0.16.2) | Export chat A, click chat B in the sidebar, export again | The second file contains chat B, not chat A |
+| Claude image choice (v0.16.2) | On a Claude chat with an uploaded image, pick **Exclude all images** and export | The file shows `[image excluded by export settings]` and no image is downloaded |
+| Errors stay visible (v0.16.2) | Trigger any export error | The error panel stays on screen until the next export |
+| Claude 404 report (v0.16.2) | Export a Claude conversation that fails with a 404 | The error states the ID format, the organizations checked and the page's own request shapes; no full IDs appear |
 
 ## Failure report template
 

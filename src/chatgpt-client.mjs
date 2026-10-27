@@ -239,6 +239,9 @@ export function endpointCandidates(conversationId, resourceHints = getResourceHi
       if (matching?.name) {
         const original = new URL(matching.name, currentOrigin());
         if (original.origin !== currentOrigin()) continue;
+        // Only this chat's own requests count. After in-app navigation the buffer still
+        // holds the previous chat's request, and fetching it first exported that chat.
+        if (original.pathname !== `/backend-api/conversation/${id}`) continue;
         const path = `${original.pathname}${original.search}`;
         if (CONVERSATION_PATH_RE.test(path) && !resourceDerived.includes(path)) resourceDerived.push(path);
       }

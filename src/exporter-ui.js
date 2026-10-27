@@ -2,54 +2,77 @@
   const CONTROL_ID = 'chatgpt-chats-exporter-control';
   const PANEL_ID = 'chatgpt-chats-exporter-panel';
   const OPTIONS_ID = 'chatgpt-chats-exporter-options';
-  const STYLE_ID = 'chatgpt-chats-exporter-style';
+  const HOST_ID = 'chatgpt-thread-archiver-ui';
   const PREF_KEY = 'chatgpt-thread-archiver-prefs';
   const LEGACY_PREF_KEY = 'chatgpt-chats-exporter-prefs';
   const PREFS_VERSION = 1;
 
-  function addStyles() {
-    if (document.getElementById(STYLE_ID)) return;
-    const style = document.createElement('style');
-    style.id = STYLE_ID;
-    style.textContent = `
-      #${CONTROL_ID} { position: fixed; right: 18px; bottom: 18px; z-index: 2147483647; border: 0; border-radius: 999px; padding: 10px 15px; background: #111827; color: white; box-shadow: 0 6px 22px rgb(0 0 0 / .2); font: 600 13px/1.2 system-ui, sans-serif; cursor: pointer; }
-      #${CONTROL_ID}:hover { background: #1f2937; }
-      @media (max-width: 700px) {
-        #${CONTROL_ID} { right: 12px; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
-        #${PANEL_ID} { right: 12px; bottom: calc(138px + env(safe-area-inset-bottom, 0px)); max-width: calc(100vw - 24px); }
-      }
-      #${CONTROL_ID}[data-state="busy"] { opacity: .7; cursor: wait; }
-      #${PANEL_ID} { position: fixed; right: 18px; bottom: 64px; z-index: 2147483647; max-width: min(420px, calc(100vw - 36px)); border: 1px solid rgb(156 163 175 / .45); border-radius: 12px; padding: 12px 14px; background: Canvas; color: CanvasText; box-shadow: 0 8px 30px rgb(0 0 0 / .2); font: 13px/1.45 system-ui, sans-serif; white-space: normal; }
-      #${PANEL_ID}[hidden] { display: none; }
-      #${PANEL_ID} strong { display: block; margin-bottom: 3px; }
-      #${PANEL_ID} code { font: 12px ui-monospace, monospace; overflow-wrap: anywhere; }
-      #${OPTIONS_ID} { position: fixed; inset: 0; z-index: 2147483646; display: grid; place-items: center; padding: 18px; background: rgb(0 0 0 / .45); font: 14px/1.45 system-ui, sans-serif; }
-      #${OPTIONS_ID}[hidden] { display: none; }
-      #${OPTIONS_ID} .cge-card { width: min(430px, 100%); padding: 22px; border: 1px solid rgb(156 163 175 / .45); border-radius: 14px; background: Canvas; color: CanvasText; box-shadow: 0 12px 42px rgb(0 0 0 / .25); }
-      #${OPTIONS_ID} h2 { margin: 0 0 8px; font-size: 18px; }
-      #${OPTIONS_ID} p { margin: 0 0 16px; color: GrayText; }
-      #${OPTIONS_ID} label { display: flex; gap: 9px; align-items: flex-start; margin: 10px 0; cursor: pointer; }
-      #${OPTIONS_ID} input { margin-top: 3px; }
-      #${OPTIONS_ID} .cge-actions { display: flex; gap: 9px; justify-content: flex-end; margin-top: 20px; }
-      #${OPTIONS_ID} fieldset { max-height: min(60vh, 520px); overflow: auto; margin: 16px 0 0; padding: 8px 12px; border: 1px solid rgb(156 163 175 / .45); border-radius: 9px; }
-      #${OPTIONS_ID} legend { padding: 0 5px; font-weight: 700; }
-      #${OPTIONS_ID} .cge-selection-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; }
-      #${OPTIONS_ID} .cge-select-all { font-weight: 600; }
-      #${OPTIONS_ID} .cge-selection-summary { margin: 0; font-size: 12px; opacity: .75; }
-      #${OPTIONS_ID} .cge-selection-toolbar + fieldset { margin-top: 8px; }
-      #${OPTIONS_ID} button { border: 0; border-radius: 8px; padding: 9px 13px; cursor: pointer; font: inherit; }
-      #${OPTIONS_ID} .cge-primary { background: #111827; color: white; }
-      #${OPTIONS_ID} .cge-secondary { background: rgb(127 127 127 / .16); color: CanvasText; }
-    `;
-    document.head.appendChild(style);
+  const STYLES = `
+    #${CONTROL_ID} { position: fixed; right: 18px; bottom: 18px; z-index: 2147483647; border: 0; border-radius: 999px; padding: 10px 15px; background: #111827; color: white; box-shadow: 0 6px 22px rgb(0 0 0 / .2); font: 600 13px/1.2 system-ui, sans-serif; cursor: pointer; }
+    #${CONTROL_ID}:hover { background: #1f2937; }
+    @media (max-width: 700px) {
+      #${CONTROL_ID} { right: 12px; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+      #${PANEL_ID} { right: 12px; bottom: calc(138px + env(safe-area-inset-bottom, 0px)); max-width: calc(100vw - 24px); }
+    }
+    #${CONTROL_ID}[data-state="busy"] { opacity: .7; cursor: wait; }
+    #${PANEL_ID} { position: fixed; right: 18px; bottom: 64px; z-index: 2147483647; max-width: min(420px, calc(100vw - 36px)); max-height: 60vh; overflow: auto; border: 1px solid rgb(156 163 175 / .45); border-radius: 12px; padding: 12px 14px; background: Canvas; color: CanvasText; box-shadow: 0 8px 30px rgb(0 0 0 / .2); font: 13px/1.45 system-ui, sans-serif; white-space: normal; overflow-wrap: anywhere; }
+    #${PANEL_ID}[hidden] { display: none; }
+    #${PANEL_ID} strong { display: block; margin-bottom: 3px; }
+    #${PANEL_ID} code { font: 12px ui-monospace, monospace; overflow-wrap: anywhere; }
+    #${OPTIONS_ID} { position: fixed; inset: 0; z-index: 2147483646; display: grid; place-items: center; padding: 18px; background: rgb(0 0 0 / .45); font: 14px/1.45 system-ui, sans-serif; }
+    #${OPTIONS_ID}[hidden] { display: none; }
+    #${OPTIONS_ID} .cge-card { width: min(430px, 100%); padding: 22px; border: 1px solid rgb(156 163 175 / .45); border-radius: 14px; background: Canvas; color: CanvasText; box-shadow: 0 12px 42px rgb(0 0 0 / .25); }
+    #${OPTIONS_ID} h2 { margin: 0 0 8px; font-size: 18px; }
+    #${OPTIONS_ID} p { margin: 0 0 16px; color: GrayText; }
+    #${OPTIONS_ID} label { display: flex; gap: 9px; align-items: flex-start; margin: 10px 0; cursor: pointer; }
+    #${OPTIONS_ID} input { margin-top: 3px; }
+    #${OPTIONS_ID} .cge-actions { display: flex; gap: 9px; justify-content: flex-end; margin-top: 20px; }
+    #${OPTIONS_ID} fieldset { max-height: min(60vh, 520px); overflow: auto; margin: 16px 0 0; padding: 8px 12px; border: 1px solid rgb(156 163 175 / .45); border-radius: 9px; }
+    #${OPTIONS_ID} legend { padding: 0 5px; font-weight: 700; }
+    #${OPTIONS_ID} .cge-selection-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; }
+    #${OPTIONS_ID} .cge-select-all { font-weight: 600; }
+    #${OPTIONS_ID} .cge-selection-summary { margin: 0; font-size: 12px; opacity: .75; }
+    #${OPTIONS_ID} .cge-selection-toolbar + fieldset { margin-top: 8px; }
+    #${OPTIONS_ID} button { border: 0; border-radius: 8px; padding: 9px 13px; cursor: pointer; font: inherit; }
+    #${OPTIONS_ID} .cge-primary { background: #111827; color: white; }
+    #${OPTIONS_ID} .cge-secondary { background: rgb(127 127 127 / .16); color: CanvasText; }
+  `;
+
+  // The button, status panel and dialogs live in a shadow root, out of reach of the host
+  // page's stylesheet. ChatGPT's CSS made every checkbox and radio button in the export
+  // dialog invisible, though they still worked. The host's own inline style resets
+  // anything the page could pass down, except the colour scheme, so the dialog still
+  // follows the site's light or dark theme.
+  function uiRoot() {
+    let host = document.getElementById(HOST_ID);
+    if (!host) {
+      host = document.createElement('chatgpt-thread-archiver');
+      host.id = HOST_ID;
+      host.style.cssText = 'all: initial !important; color-scheme: inherit !important;';
+      document.body.appendChild(host);
+    }
+    if (!host.shadowRoot) {
+      const style = document.createElement('style');
+      style.textContent = STYLES;
+      host.attachShadow({ mode: 'open' }).appendChild(style);
+    }
+    return host.shadowRoot;
   }
 
+  function uiElement(id) {
+    return document.getElementById(HOST_ID)?.shadowRoot?.getElementById(id) ?? null;
+  }
+
+  // One timer for the panel: a status that hides itself must not, seconds later, hide an
+  // error shown after it.
+  let statusTimer = null;
+
   function showStatus(title, detail = '', isError = false) {
-    let panel = document.getElementById(PANEL_ID);
+    let panel = uiElement(PANEL_ID);
     if (!panel) {
       panel = document.createElement('div');
       panel.id = PANEL_ID;
-      document.body.appendChild(panel);
+      uiRoot().appendChild(panel);
     }
     panel.hidden = false;
     panel.setAttribute('role', isError ? 'alert' : 'status');
@@ -66,7 +89,8 @@
       });
       panel.appendChild(detailNode);
     }
-    if (!isError) window.setTimeout(() => { if (panel) panel.hidden = true; }, 6000);
+    window.clearTimeout(statusTimer);
+    statusTimer = isError ? null : window.setTimeout(() => { panel.hidden = true; }, 6000);
   }
 
   function downloadHtml(html, fileName) {
@@ -194,8 +218,11 @@
     return null;
   }
 
-  function imageEntries(conversation) {
-    const branchRecords = Array.isArray(conversation?.branches) && conversation.branches.length > 1
+  // One entry per image occurrence, counted branch by branch exactly as the resolver counts
+  // them, so `index` lines up with `imageIndexOffset`. A message shared by several branches
+  // carries its images into each of them; `key` ties those occurrences together.
+  function imageEntries(conversation, { allBranches = true } = {}) {
+    const branchRecords = allBranches && Array.isArray(conversation?.branches) && conversation.branches.length > 1
       ? conversation.branches
       : [{ index: 0, messages: conversation?.messages ?? [] }];
     let index = 0;
@@ -204,10 +231,11 @@
       let turnIndex = 0;
       for (const message of branch.messages ?? []) {
         if (message.role !== 'unknown') turnIndex += 1;
-        for (const block of message.textBlocks ?? []) {
+        for (const [blockIndex, block] of (message.textBlocks ?? []).entries()) {
           if (block.type !== 'image') continue;
           entries.push({
             index: index++,
+            key: `${message.id}\u0000${blockIndex}\u0000${block.asset?.pointer ?? ''}`,
             branchIndex: branch.index ?? 0,
             messageIndex: turnIndex,
             speaker: message.authorLabel ?? (message.role === 'user' ? 'You' : 'ChatGPT'),
@@ -228,9 +256,16 @@
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
-  function showImageSelection(conversation) {
-    const entries = imageEntries(conversation);
-    if (entries.length === 0) return Promise.resolve(new Set());
+  function showImageSelection(conversation, allBranches) {
+    const occurrences = imageEntries(conversation, { allBranches });
+    if (occurrences.length === 0) return Promise.resolve(new Set());
+    const branchTotal = allBranches && Array.isArray(conversation?.branches) && conversation.branches.length > 1 ? conversation.branches.length : 1;
+    const branchesByKey = new Map();
+    for (const entry of occurrences) branchesByKey.set(entry.key, [...(branchesByKey.get(entry.key) ?? []), entry.branchIndex]);
+    // An image in a message that several branches share is listed once; choosing it
+    // includes or excludes it everywhere it occurs.
+    const listed = new Set();
+    const entries = occurrences.filter((entry) => !listed.has(entry.key) && listed.add(entry.key));
     return new Promise((resolve) => {
       const overlay = document.createElement('div');
       overlay.id = OPTIONS_ID;
@@ -256,11 +291,12 @@
       legend.textContent = `${entries.length} image${entries.length === 1 ? '' : 's'} found`;
       fieldset.appendChild(legend);
       const inputs = [];
-      for (const entry of entries) {
-        const branchLabel = entries.some((candidate) => candidate.branchIndex !== entry.branchIndex) ? ` · branch ${entry.branchIndex + 1}` : '';
+      for (const [position, entry] of entries.entries()) {
+        const inBranches = [...new Set(branchesByKey.get(entry.key))].sort((left, right) => left - right);
+        const branchLabel = branchTotal > 1 && inBranches.length < branchTotal ? ` · branch ${inBranches.map((branch) => branch + 1).join(', ')}` : '';
         const modelLabel = entry.generated ? ` · ${entry.imageModel}` : '';
-        const image = checkbox(`cge-image-${entry.index}`, `Image ${entry.index + 1}${branchLabel} · message ${entry.messageIndex} · ${entry.speaker} · ${entry.generated ? 'generated' : 'uploaded/reference'}${modelLabel} · ${formatImageSize(entry.sizeBytes)}`, true);
-        image.input.dataset.imageIndex = String(entry.index);
+        const image = checkbox(`cge-image-${position}`, `Image ${position + 1}${branchLabel} · message ${entry.messageIndex} · ${entry.speaker} · ${entry.generated ? 'generated' : 'uploaded/reference'}${modelLabel} · ${formatImageSize(entry.sizeBytes)}`, true);
+        image.input.dataset.imageKey = entry.key;
         image.input.dataset.sizeBytes = Number.isFinite(entry.sizeBytes) ? String(entry.sizeBytes) : '';
         inputs.push(image.input);
         fieldset.appendChild(image.wrapper);
@@ -300,17 +336,20 @@
       actions.append(cancel, continueButton);
       card.append(heading, intro, toolbar, fieldset, actions);
       overlay.appendChild(card);
-      document.body.appendChild(overlay);
+      uiRoot().appendChild(overlay);
       const close = (selection) => { overlay.remove(); resolve(selection); };
       cancel.addEventListener('click', () => close(null));
       overlay.addEventListener('click', (event) => { if (event.target === overlay) close(null); });
-      continueButton.addEventListener('click', () => close(new Set(inputs.filter((input) => input.checked).map((input) => Number(input.dataset.imageIndex)))));
+      continueButton.addEventListener('click', () => {
+        const chosen = new Set(inputs.filter((input) => input.checked).map((input) => input.dataset.imageKey));
+        close(new Set(occurrences.filter((entry) => chosen.has(entry.key)).map((entry) => entry.index)));
+      });
       continueButton.focus();
     });
   }
 
   function showExportOptions(button, provider) {
-    if (document.getElementById(OPTIONS_ID)) return;
+    if (uiElement(OPTIONS_ID)) return;
     const prefs = loadPrefs();
     const overlay = document.createElement('div');
     overlay.id = OPTIONS_ID;
@@ -328,7 +367,6 @@
     const messageModels = checkbox('cge-pref-message-models', 'Show a model label on each assistant message', prefs.messageModels);
     const thinking = checkbox('cge-pref-thinking', 'Include Claude thinking and tool calls (collapsed in the file)', prefs.thinking === true);
     const imageChoices = [];
-    let imageFieldset = null;
     const branchChoices = [];
     const branchFieldset = document.createElement('fieldset');
     const branchLegend = document.createElement('legend');
@@ -339,16 +377,14 @@
       branchChoices.push(branchRadio.input);
       branchFieldset.appendChild(branchRadio.wrapper);
     }
-    {
-      imageFieldset = document.createElement('fieldset');
-      const imageLegend = document.createElement('legend');
-      imageLegend.textContent = 'Images';
-      imageFieldset.appendChild(imageLegend);
-      for (const choice of [['all', 'Include all images'], ['none', 'Exclude all images'], ['choose', 'Choose images after loading the conversation']]) {
-        const imageRadio = radio('cge-image-mode', `cge-image-mode-${choice[0]}`, choice[1], choice[0], prefs.imageMode === choice[0]);
-        imageChoices.push(imageRadio.input);
-        imageFieldset.appendChild(imageRadio.wrapper);
-      }
+    const imageFieldset = document.createElement('fieldset');
+    const imageLegend = document.createElement('legend');
+    imageLegend.textContent = 'Images';
+    imageFieldset.appendChild(imageLegend);
+    for (const choice of [['all', 'Include all images'], ['none', 'Exclude all images'], ['choose', 'Choose images after loading the conversation']]) {
+      const imageRadio = radio('cge-image-mode', `cge-image-mode-${choice[0]}`, choice[1], choice[0], prefs.imageMode === choice[0]);
+      imageChoices.push(imageRadio.input);
+      imageFieldset.appendChild(imageRadio.wrapper);
     }
     const actions = document.createElement('div');
     actions.className = 'cge-actions';
@@ -361,11 +397,9 @@
     exportButton.className = 'cge-primary';
     exportButton.textContent = 'Export HTML';
     actions.append(cancel, exportButton);
-    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper, messageModels.wrapper, thinking.wrapper, branchFieldset);
-    if (imageFieldset) card.appendChild(imageFieldset);
-    card.appendChild(actions);
+    card.append(heading, intro, url.wrapper, title.wrapper, conversationId.wrapper, messageModels.wrapper, thinking.wrapper, branchFieldset, imageFieldset, actions);
     overlay.appendChild(card);
-    document.body.appendChild(overlay);
+    uiRoot().appendChild(overlay);
 
     const close = () => overlay.remove();
     cancel.addEventListener('click', close);
@@ -377,7 +411,7 @@
         conversationId: conversationId.input.checked,
         messageModels: messageModels.input.checked,
         thinking: thinking.input.checked,
-        imageMode: provider === 'ChatGPT' ? (imageChoices.find((input) => input.checked)?.value ?? prefs.imageMode) : prefs.imageMode,
+        imageMode: imageChoices.find((input) => input.checked)?.value ?? prefs.imageMode,
         branchMode: branchChoices.find((input) => input.checked)?.value ?? prefs.branchMode,
       };
       savePrefs(chosen);
@@ -408,6 +442,9 @@
     const branches = Array.isArray(conversation?.branches) && conversation.branches.length > 1 ? conversation.branches : [];
     if (branches.length === 0) return resolve(conversation, options);
     const totalImages = imageEntries(conversation).length;
+    // Branches share their common messages, so one cache fetches each image once rather
+    // than once per branch.
+    const imageCache = new Map();
     let imageOffset = 0;
     let completed = 0;
     const resolvedBranches = [];
@@ -416,23 +453,24 @@
       const branchImageCount = imageEntries(branchConversation).length;
       const resolved = await resolve(branchConversation, {
         ...options,
+        imageCache,
         imageIndexOffset: imageOffset,
         onProgress: () => options.onProgress?.(++completed, totalImages),
       });
       resolvedBranches.push({ ...branch, messages: resolved.messages, stats: resolved.stats });
       imageOffset += branchImageCount;
     }
-    const allMessages = resolvedBranches.flatMap((branch) => branch.messages);
-    const imageStats = ['imageCount', 'imageEmbeddedCount', 'imageExcludedCount', 'imageUnavailableCount', 'imageBytes', 'imageBudgetLimitedCount']
-      .reduce((summary, key) => ({ ...summary, [key]: resolvedBranches.reduce((sum, branch) => sum + Number(branch.stats?.[key] ?? 0), 0) }), {});
     const branchTree = branchTreeFromBranches(resolvedBranches);
     const displayedMessages = branchTree.length > 0 ? messagesFromBranchTree(branchTree) : (resolvedBranches[0]?.messages ?? conversation.messages);
+    // Counted from what the file shows: a shared message appears there once, so its
+    // images count once, not once per branch that passes through it.
+    const shownMessages = branchTree.length > 0 ? displayedMessages : resolvedBranches.flatMap((branch) => branch.messages);
     return {
       ...conversation,
       messages: resolvedBranches[0]?.messages ?? conversation.messages,
       branches: resolvedBranches,
       branchTree,
-      stats: { ...conversation.stats, ...imageStats, messageCount: displayedMessages.length },
+      stats: { ...conversation.stats, ...summarizeImageStats(shownMessages), messageCount: displayedMessages.length },
     };
   }
 
@@ -461,7 +499,7 @@
       const includeImages = prefs.imageMode !== 'none';
       if (prefs.imageMode === 'choose') {
         showStatus('Choose images…', 'Review the available images before any image downloads begin.');
-        selectedImageIndices = await showImageSelection(normalized);
+        selectedImageIndices = await showImageSelection(normalized, includeAllBranches);
         if (selectedImageIndices === null) {
           showStatus('Export cancelled');
           return;
@@ -513,7 +551,7 @@
 
   function install() {
     const provider = providerForLocation();
-    const existing = document.getElementById(CONTROL_ID);
+    const existing = uiElement(CONTROL_ID);
     if (!provider) {
       existing?.remove();
       return;
@@ -522,7 +560,6 @@
     if (existing?.dataset.provider === provider) return;
     existing?.remove();
     if (provider === 'ChatGPT') installAuthCacheInvalidation();
-    addStyles();
     const button = document.createElement('button');
     button.id = CONTROL_ID;
     button.dataset.provider = provider;
@@ -530,7 +567,7 @@
     button.textContent = 'Export HTML';
     button.title = `Export the currently open ${provider} conversation as HTML`;
     button.addEventListener('click', () => showExportOptions(button, provider));
-    document.body.appendChild(button);
+    uiRoot().appendChild(button);
   }
 
   function boot() {

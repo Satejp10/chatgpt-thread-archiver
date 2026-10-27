@@ -1,4 +1,4 @@
-const ARCHIVER_VERSION = '0.16.1';
+const ARCHIVER_VERSION = '0.16.2';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -540,13 +540,25 @@ export function selectConversationBranch(conversation, index = 0) {
   };
 }
 
+// Emphasis only opens and closes at a word boundary and never next to a space, so
+// `MAX_RETRY_COUNT`, `get_user_id()`, `2*3*4`, `x**2 + y**2` and `5 * 3 * 2` keep every
+// character instead of losing their underscores and asterisks to italics.
+function emphasis(text) {
+  return text
+    .replace(/(^|[^A-Za-z0-9_*])\*\*(?=[^\s*])([^*\n]*?[^\s*])\*\*(?![A-Za-z0-9_*])/g, '$1<strong>$2</strong>')
+    .replace(/(^|[^A-Za-z0-9_])__(?=[^\s_])([^_\n]*?[^\s_])__(?![A-Za-z0-9_])/g, '$1<strong>$2</strong>')
+    .replace(/(^|[^A-Za-z0-9_*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![A-Za-z0-9_*])/g, '$1<em>$2</em>')
+    .replace(/(^|[^A-Za-z0-9_])_(?=[^\s_])([^_\n]*?[^\s_])_(?![A-Za-z0-9_])/g, '$1<em>$2</em>');
+}
+
 function inlineFormatting(escapedText) {
-  return escapedText
-    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/__([^_\n]+)__/g, '<strong>$1</strong>')
-    .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
-    .replace(/_([^_\n]+)_/g, '<em>$1</em>');
+  // Code spans are literal, so they are set aside before emphasis is matched and put
+  // back afterwards. Emphasis can still wrap a whole code span.
+  const spans = [];
+  const guarded = escapedText
+    .replace(/[\uE000\uE001]/g, (char) => `&#x${char.charCodeAt(0).toString(16).toUpperCase()};`)
+    .replace(/`([^`\n]+)`/g, (match, code) => `\uE000${spans.push(code) - 1}\uE001`);
+  return emphasis(guarded).replace(/\uE000(\d+)\uE001/g, (match, index) => `<code>${spans[Number(index)]}</code>`);
 }
 
 export function textToBlocks(text) {

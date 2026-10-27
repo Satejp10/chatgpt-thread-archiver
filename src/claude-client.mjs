@@ -125,12 +125,63 @@ export function getClaudeOrganizationId() {
   return getClaudeCookie('lastActiveOrg');
 }
 
+const CLAUDE_ORG_RE = /^[A-Za-z0-9_-]{1,200}$/;
+const CLAUDE_CONVERSATION_ID_RE = /^[A-Za-z0-9_-]{16,120}$/;
+const CLAUDE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MAX_FALLBACK_ORGANIZATIONS = 5;
+
 export function claudeConversationPath(organizationId, conversationId) {
   const org = String(organizationId ?? '');
   const id = String(conversationId ?? '');
-  if (!/^[A-Za-z0-9_-]{1,200}$/.test(org) || !/^[A-Za-z0-9_-]{16,120}$/.test(id)) return null;
+  if (!CLAUDE_ORG_RE.test(org) || !CLAUDE_CONVERSATION_ID_RE.test(id)) return null;
   const query = 'tree=true&rendering_mode=messages&render_all_tools=true';
   return `/api/organizations/${encodeURIComponent(org)}/chat_conversations/${encodeURIComponent(id)}?${query}`;
+}
+
+// What a 404 report may say about the conversation id: whether it is a chat UUID, and a
+// short type prefix such as `cse_` when it has one. Never the id itself.
+export function claudeIdFormat(conversationId) {
+  const value = String(conversationId ?? '');
+  if (CLAUDE_UUID_RE.test(value)) return 'chat UUID';
+  const prefix = value.match(/^([a-z]{2,12})_/)?.[1];
+  return `${prefix ? `"${prefix}_" prefix, ` : ''}${value.length} characters, not a chat UUID`;
+}
+
+// A static API segment is lowercase words, optionally versioned (`chat_conversations_v2`).
+// Anything else long enough to be an identifier is replaced, keeping only a type prefix.
+function claudeSegmentShape(segment, conversationId) {
+  if (segment === conversationId) return '<this-chat>';
+  if (segment.length < 8 || /^[a-z]+(?:[_-][a-z]+)*(?:[_-]v\d{1,2})?$/.test(segment)) return segment;
+  const prefix = segment.match(/^([a-z]{2,12})_/)?.[1];
+  return prefix ? `<${prefix}_id>` : '<id>';
+}
+
+export function redactClaudePath(pathname, conversationId = '') {
+  return String(pathname ?? '').split('/').map((segment) => claudeSegmentShape(segment, String(conversationId ?? ''))).join('/');
+}
+
+// The page's own API requests, reduced to path shapes with every identifier replaced and
+// query values dropped. Requests naming this conversation come first: they show which
+// endpoint Claude's page itself used to load it.
+export function claudeRequestShapes(conversationId, entries = null, limit = 8) {
+  const id = String(conversationId ?? '');
+  const source = entries ?? [...(globalThis.performance?.getEntriesByType?.('resource') ?? []), ...claudeIncognitoState.observed];
+  const naming = [];
+  const other = [];
+  for (const entry of [...source].reverse()) {
+    let parsed;
+    try {
+      parsed = new URL(String(entry?.name ?? ''), currentClaudeOrigin());
+    } catch {
+      continue;
+    }
+    if (parsed.origin !== currentClaudeOrigin() || !/^\/(?:api|v1)\//.test(parsed.pathname)) continue;
+    const keys = [...new Set(parsed.searchParams.keys())].filter((key) => /^[A-Za-z_]{1,40}$/.test(key)).slice(0, 6);
+    const shape = `${redactClaudePath(parsed.pathname, id)}${keys.length ? `?${keys.join(',')}` : ''}`;
+    const list = id && (parsed.pathname.split('/').includes(id) || [...parsed.searchParams.values()].includes(id)) ? naming : other;
+    if (!list.includes(shape)) list.push(shape);
+  }
+  return { naming: naming.slice(0, limit), other: other.slice(0, limit) };
 }
 
 async function fetchClaudeWithTimeout(fetchImpl, url, options, timeoutMs) {
@@ -146,17 +197,9 @@ async function fetchClaudeWithTimeout(fetchImpl, url, options, timeoutMs) {
   }
 }
 
-export async function fetchClaudeConversation(conversationId, { fetchImpl = globalThis.fetch, timeoutMs = CLAUDE_TIMEOUT_MS, organizationId = getClaudeOrganizationId() } = {}) {
-  if (!conversationId) throw new ClaudeClientError('missing-id', 'Open a Claude conversation before exporting.');
-  if (typeof fetchImpl !== 'function') throw new ClaudeClientError('no-fetch', 'This browser does not provide fetch().');
-  if (!organizationId) throw new ClaudeClientError('missing-organization', 'Claude session information was not found. Sign in, reload the conversation, and retry.');
-
-  const path = claudeConversationPath(organizationId, conversationId);
-  if (!path) throw new ClaudeClientError('invalid-route', 'The Claude conversation route is not recognized.');
-  const url = new URL(path, currentClaudeOrigin()).toString();
-  let response;
+async function claudeGet(fetchImpl, path, timeoutMs) {
   try {
-    response = await fetchClaudeWithTimeout(fetchImpl, url, {
+    return await fetchClaudeWithTimeout(fetchImpl, new URL(path, currentClaudeOrigin()).toString(), {
       method: 'GET',
       credentials: 'same-origin',
       headers: { Accept: 'application/json' },
@@ -166,9 +209,76 @@ export async function fetchClaudeConversation(conversationId, { fetchImpl = glob
     if (error instanceof ClaudeClientError) throw error;
     throw new ClaudeClientError('network', 'The browser could not reach Claude.');
   }
+}
+
+// The `lastActiveOrg` cookie names one organization. An account with two (a personal plan
+// and a Team, say) gets a 404 for a chat that lives in the other one, so the account's
+// organization list is the fallback. A failure here only means there is nothing to add.
+async function listClaudeOrganizations(fetchImpl, timeoutMs) {
+  try {
+    const response = await claudeGet(fetchImpl, '/api/organizations', timeoutMs);
+    if (!response.ok || !String(response.headers?.get?.('content-type') ?? '').toLowerCase().includes('json')) return [];
+    const body = await response.json();
+    return [...new Set((Array.isArray(body) ? body : []).map((org) => String(org?.uuid ?? org?.id ?? '')).filter((id) => CLAUDE_ORG_RE.test(id)))];
+  } catch {
+    return [];
+  }
+}
+
+// Cowork sessions have been reported (not documented) to use `cse_` ids and to be absent
+// from the chat API. Since the September 2026 merge they open from the same conversation
+// list as chats, so the button can appear on one.
+function claudeNotFoundError(conversationId, organizationsTried) {
+  const id = String(conversationId ?? '');
+  const message = CLAUDE_UUID_RE.test(id)
+    ? 'Claude’s chat API has no conversation with this ID in any organization on this account. Since chat and Cowork merged, a conversation that ran as a Cowork task may be stored outside the chat API this exporter reads.'
+    : id.startsWith('cse_')
+      ? 'This ID has the shape of a Cowork task (“cse_…”), and Claude’s chat API has no conversation with it. Claude stores Cowork tasks outside the chat API this exporter reads, so it cannot export them yet.'
+      : 'This is not a regular Claude chat ID, and Claude’s chat API has no conversation with it. Since chat and Cowork merged, some conversations are stored outside the chat API this exporter reads.';
+  const requests = claudeRequestShapes(conversationId);
+  return new ClaudeClientError('not-found', message, {
+    pagePath: redactClaudePath(globalThis.location?.pathname ?? '', conversationId),
+    idFormat: claudeIdFormat(conversationId),
+    organizationsTried,
+    pageRequests: requests.naming,
+    recentRequests: requests.naming.length ? [] : requests.other,
+  });
+}
+
+export async function fetchClaudeConversation(conversationId, { fetchImpl = globalThis.fetch, timeoutMs = CLAUDE_TIMEOUT_MS, organizationId = getClaudeOrganizationId() } = {}) {
+  if (!conversationId) throw new ClaudeClientError('missing-id', 'Open a Claude conversation before exporting.');
+  if (typeof fetchImpl !== 'function') throw new ClaudeClientError('no-fetch', 'This browser does not provide fetch().');
+  if (!CLAUDE_CONVERSATION_ID_RE.test(String(conversationId))) throw new ClaudeClientError('invalid-route', 'The Claude conversation route is not recognized.');
+
+  const tried = new Set();
+  const request = (org) => {
+    tried.add(org);
+    return claudeGet(fetchImpl, claudeConversationPath(org, conversationId), timeoutMs);
+  };
+  let response = organizationId && CLAUDE_ORG_RE.test(organizationId) ? await request(organizationId) : null;
+  if (!response || response.status === 403 || response.status === 404) {
+    const others = (await listClaudeOrganizations(fetchImpl, timeoutMs)).filter((org) => !tried.has(org)).slice(0, MAX_FALLBACK_ORGANIZATIONS);
+    let fallbackError = null;
+    for (const org of others) {
+      let candidate;
+      try {
+        candidate = await request(org);
+      } catch (error) {
+        fallbackError = error;
+        continue;
+      }
+      if (candidate.ok) {
+        response = candidate;
+        break;
+      }
+      response ??= candidate;
+    }
+    if (!response && fallbackError) throw fallbackError;
+  }
+  if (!response) throw new ClaudeClientError('missing-organization', 'Claude session information was not found. Sign in, reload the conversation, and retry.');
 
   if (response.status === 401 || response.status === 403) throw new ClaudeClientError('auth', `Claude rejected the conversation request (${response.status}). Sign in again, then retry.`);
-  if (response.status === 404) throw new ClaudeClientError('not-found', 'Claude could not find this conversation. The internal request path may have changed.');
+  if (response.status === 404) throw claudeNotFoundError(conversationId, tried.size);
   if (response.status === 429) throw new ClaudeClientError('rate-limit', 'Claude is rate-limiting the request. Wait briefly and retry.');
   if (!response.ok) throw new ClaudeClientError('http', `Claude returned HTTP ${response.status}.`);
 
@@ -490,5 +600,12 @@ export function normalizeClaudeConversation(raw, conversationId = null) {
 
 export function describeClaudeError(error) {
   if (!(error instanceof ClaudeClientError)) return error?.message ?? String(error);
-  return error.message;
+  const details = error.details ?? {};
+  const lines = [error.message];
+  if (details.pagePath) lines.push(`Page path: ${details.pagePath}`);
+  if (details.idFormat) lines.push(`Conversation ID: ${details.idFormat}`);
+  if (Number.isInteger(details.organizationsTried)) lines.push(`Organizations checked: ${details.organizationsTried}`);
+  if (details.pageRequests?.length) lines.push(`Requests Claude’s page made for this chat: ${details.pageRequests.join(' | ')}`);
+  if (details.recentRequests?.length) lines.push(`Claude’s page made no request naming this chat. Its recent API requests: ${details.recentRequests.join(' | ')}`);
+  return lines.join('\n');
 }

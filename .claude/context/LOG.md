@@ -270,3 +270,37 @@ reports Claude exports label only one message with a model (likely the latest) a
 rest `unknown`, while ChatGPT finds several: next session. Unconfirmed from the review:
 a new temporary/incognito chat started from inside one may export the previous one until
 its first message.
+
+## 2026-10-27 — v0.16.3: Claude 404 retries, honest report, reply models
+
+**Did:** Owner's live test of v0.16.2: ChatGPT dialog controls visible (fixed). Still
+broken: a Claude chat 404s ("Organizations checked: 2"), and a chat whose prompt was
+retried with Haiku, Sonnet and Opus 5.5 exported `Model: claude-opus-5-5` in the header and
+`unknown / not found` on every reply. The v0.16.2 report's first "page" request
+(`?tree,rendering_mode,render_all_tools`) was almost certainly the exporter's own
+request to the first organization. The fix: the exporter now records its own requests and
+excludes them, shows statuses, always lists other requests, and makes up to three
+evidence-based retries after a 404 or 403 (page's organization, page's exact tree query,
+`consistency=strong`). Replies get a model from any model-named field outside content
+whose value looks like `claude-…`. Otherwise the header says `Chat model: … (Claude’s data
+names no model for individual replies)`. Added `diagnostics/claude-reply-model-probe.js`.
+
+**Decided:** Revised the v0.16.2 rejection of replaying the page's requests. Allowed now,
+narrowly: always a GET, only the page's own conversation request, only when its query
+asks for the message tree (`tree=true`, `rendering_mode=messages`), at most eight
+allowlisted parameters, and only after every organization refused. Rejected: patching
+`fetch` to capture the page's request headers (the repo does not monkeypatch page
+APIs), and reading a model from any `claude…` value regardless of field name (a platform
+or client name could pass as a model).
+
+**Learned:** Resource Timing has no method or headers. In the stand-in runs, the request
+just answered was not yet in the log when the report was built, but earlier ones were.
+That is how v0.16.2 showed the first organization's request and not the second. A
+DevTools capture published on jvt.me (2026-09-04) shows Claude's page asking with
+`tree=True&rendering_mode=messages&render_all_tools=true&include_inline_comparison=true&consistency=strong`,
+with `model` only at the chat level. Other exporters (pinguarmy/ai-chat-exporter,
+agarwalvishal/claude-chat-exporter) read only that field.
+
+**Open:** Live acceptance of v0.16.3. If the 404 persists, the new report should show
+where the page gets the chat. Run the probe on the retried chat to learn whether Claude
+stores a model per reply.

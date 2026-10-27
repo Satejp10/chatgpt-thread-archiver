@@ -23,11 +23,13 @@ export function deriveExportStats(messages, baseStats = {}, { model = null } = {
     ...list.map((message) => safeModelIdentifier(message?.modelSlug)),
   ].filter(Boolean))];
   const textBlockCount = list.reduce((sum, message) => sum + (message?.textBlocks ?? []).filter((block) => block.type === 'text' || block.type === 'code').length, 0);
+  const assistantMessages = list.filter((message) => message.role === 'assistant');
   return {
     ...baseStats,
     messageCount: list.length,
     userMessageCount: list.filter((message) => message.role === 'user').length,
-    assistantMessageCount: list.filter((message) => message.role === 'assistant').length,
+    assistantMessageCount: assistantMessages.length,
+    replyModelCount: assistantMessages.filter((message) => safeModelIdentifier(message?.modelSlug)).length,
     toolMessageCount: list.filter((message) => message.role === 'tool').length,
     textBlockCount,
     wordCount: wordCount(text),

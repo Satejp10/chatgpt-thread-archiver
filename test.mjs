@@ -3,9 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
 import { normalizeConversation, renderConversationHtml, sanitizeFilename, textToBlocks, ConversationShapeError, selectConversationBranch, messagesFromBranchTree, discoverImageModelMetadata, extractTextBlocks } from './src/core.mjs';
 import { ChatGPTClientError, clearAccessTokenCache, describeClientError, endpointCandidates, getAuthContext, getConversationIdFromUrl, isExporterRoute, parseConversationRoute } from './src/chatgpt-client.mjs';
-import { applyImageBudget, candidateDownloadUrl, IMAGE_LIMITS, resolveClaudeConversationImages, resolveConversationImages, retryDelayMs } from './src/assets.mjs';
+import { applyImageBudget, candidateDownloadUrl, IMAGE_LIMITS, resolveClaudeConversationImages, resolveConversationImages, retryDelayMs, summarizeImageStats } from './src/assets.mjs';
 import { deriveExportStats } from './src/export-stats.mjs';
-import { ClaudeClientError, claudeConversationPath, fetchClaudeConversation, getClaudeConversationIdFromUrl, isClaudeExporterRoute, normalizeClaudeConversation, parseClaudeConversationRoute } from './src/claude-client.mjs';
+import { ClaudeClientError, claudeConversationPath, claudeIdFormat, claudeRequestShapes, describeClaudeError, fetchClaudeConversation, getClaudeConversationIdFromUrl, isClaudeExporterRoute, normalizeClaudeConversation, parseClaudeConversationRoute, redactClaudePath } from './src/claude-client.mjs';
 
 const load = async (name) => JSON.parse(await readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
 const clientSource = await readFile(new URL('./src/chatgpt-client.mjs', import.meta.url), 'utf8');
@@ -47,8 +47,8 @@ assert.match(simpleHtml, /class="copy-btn"/);
 assert.match(simpleHtml, /querySelector\("\.content"\)/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.16\.1"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.1/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.16\.2"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.2/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -215,7 +215,7 @@ assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.1/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.2/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -397,6 +397,19 @@ assert.equal(blocks[1].type, 'code');
 assert.equal(blocks[1].language, 'python');
 assert.match(blocks[1].html, /print/);
 
+// Emphasis only opens and closes at a word boundary and never inside a code span:
+// identifiers, paths and arithmetic keep every underscore and asterisk.
+const inline = (text) => textToBlocks(text)[0].html;
+assert.equal(inline('Set MAX_RETRY_COUNT and call get_user_id()'), 'Set MAX_RETRY_COUNT and call get_user_id()');
+assert.equal(inline('Run `my_script_name.py` now'), 'Run <code>my_script_name.py</code> now');
+assert.equal(inline('2*3*4, x**2 + y**2 and 5 * 3 * 2'), '2*3*4, x**2 + y**2 and 5 * 3 * 2');
+assert.equal(inline('https://example.com/a_b_c and _private_var'), 'https://example.com/a_b_c and _private_var');
+assert.equal(inline('**Note:** *this* and _that_ and __bold__'), '<strong>Note:</strong> <em>this</em> and <em>that</em> and <strong>bold</strong>');
+assert.equal(inline('**Run `npm test`** first'), '<strong>Run <code>npm test</code></strong> first');
+assert.equal(inline('a <b> **x & y**'), 'a &lt;b&gt; <strong>x &amp; y</strong>');
+assert.equal(inline('* item with *emphasis*'), '* item with <em>emphasis</em>');
+assert.equal(inline('\uE0000\uE001 stays text'), '&#xE000;0&#xE001; stays text');
+
 const deepParts = { content: { parts: [{ type: 'nested', parts: [] }] } };
 let cursor = deepParts.content.parts[0];
 for (let index = 0; index < 20; index += 1) {
@@ -467,6 +480,26 @@ assert.ok(endpointCandidates(validId, [
   '/backend-api/conversation/four',
   '/backend-api/conversation/five',
 ]).length <= 4);
+
+// After in-app navigation the resource buffer still holds the previous chat's request. It
+// must never become a candidate: fetched first, it exported that chat instead of this one.
+{
+  const openChat = 'bbbbbbbb-1111-4222-8333-444444444444';
+  const previousChat = 'aaaaaaaa-1111-4222-8333-444444444444';
+  const realPerformance = Object.getOwnPropertyDescriptor(globalThis, 'performance');
+  Object.defineProperty(globalThis, 'performance', { configurable: true, writable: true, value: { getEntriesByType: () => [
+    { name: `https://chatgpt.com/backend-api/conversation/${previousChat}`, startTime: 1 },
+    { name: `https://chatgpt.com/backend-api/conversation/${openChat}?history_and_training_disabled=false`, startTime: 2 },
+  ] } });
+  try {
+    const candidates = endpointCandidates(openChat);
+    assert.ok(candidates.length > 0);
+    assert.ok(candidates.every((path) => path.startsWith(`/backend-api/conversation/${openChat}`)), candidates.join(' | '));
+    assert.equal(candidates[0], `/backend-api/conversation/${openChat}?history_and_training_disabled=false`);
+  } finally {
+    Object.defineProperty(globalThis, 'performance', realPerformance);
+  }
+}
 
 const claude = normalizeClaudeConversation(await load('claude-conversation.json'), 'claude-conversation-id');
 assert.equal(claude.provider, 'Claude');
@@ -543,6 +576,38 @@ const noAuthResolved = await resolveClaudeConversationImages(claudeImages, { fet
 assert.equal(noAuthResolved.stats.imageEmbeddedCount, 1);
 assert.match(assetsSource, /requiresAuth = true/);
 assert.match(uiSource, /resolveClaudeConversationImages/);
+
+// All-branches exports resolve each branch separately; a shared cache means an image in a
+// message the branches share is fetched once, not once per branch.
+{
+  let fetches = 0;
+  const countingFetch = async (url) => { fetches += 1; return claudeImageFetch(url); };
+  const imageCache = new Map();
+  await resolveClaudeConversationImages(claudeImages, { fetchImpl: countingFetch, imageCache });
+  const secondBranch = await resolveClaudeConversationImages(claudeImages, { fetchImpl: countingFetch, imageCache, imageIndexOffset: 1 });
+  assert.equal(fetches, 1);
+  assert.equal(secondBranch.stats.imageEmbeddedCount, 1);
+  const shown = summarizeImageStats(secondBranch.messages);
+  assert.deepEqual(shown, { imageCount: 1, imageEmbeddedCount: 1, imageExcludedCount: 0, imageUnavailableCount: 0, imageBytes: secondBranch.stats.imageBytes, imageBudgetLimitedCount: 0 });
+  assert.deepEqual(summarizeImageStats(excludedImages.messages), { imageCount: 3, imageEmbeddedCount: 0, imageExcludedCount: 3, imageUnavailableCount: 0, imageBytes: 0, imageBudgetLimitedCount: 0 });
+}
+// A ChatGPT file request that answers with the image itself is read, not downloaded again.
+{
+  const requested = [];
+  const directImage = normalizeConversation({ title: 'Direct', mapping: { root: { parent: null, children: ['u'] }, u: { parent: 'root', children: [], message: { id: 'u', author: { role: 'user' }, content: { parts: [{ content_type: 'image_asset_pointer', asset_pointer: 'file-service://file-direct1' }] } } } }, current_node: 'u' });
+  const resolved = await resolveConversationImages(directImage, {
+    conversationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    authContext: { headers: {} },
+    fetchImpl: async (url) => {
+      requested.push(String(url));
+      return { status: 200, ok: true, headers: { get: (name) => (name === 'content-type' ? 'image/png' : null) }, arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer };
+    },
+  });
+  assert.equal(resolved.stats.imageEmbeddedCount, 1);
+  assert.equal(requested.length, 1, requested.join(' | '));
+}
+assert.match(uiSource, /const imageCache = new Map\(\);/);
+assert.match(uiSource, /summarizeImageStats\(shownMessages\)/);
 
 // Claude thinking and tool blocks (payload shape confirmed live on 2026-09-18).
 const claudeReasoning = normalizeClaudeConversation(await load('claude-reasoning-conversation.json'), 'claude-reasoning-id');
@@ -639,6 +704,61 @@ const claudeResponse = (status, payload = {}) => ({ status, ok: status >= 200 &&
 const fetchedClaude = await fetchClaudeConversation('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', { organizationId: 'org-123', fetchImpl: async (url, options) => { assert.match(url, /chat_conversations\/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/); assert.equal(options.credentials, 'same-origin'); return claudeResponse(200, { name: 'Fetched', chat_messages: [{ uuid: 'm', sender: 'human', content: [{ type: 'text', text: 'ok' }] }] }); } });
 assert.equal(fetchedClaude.name, 'Fetched');
 await assert.rejects(() => fetchClaudeConversation('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', { fetchImpl: async () => claudeResponse(401, {}) }), ClaudeClientError);
+
+// The `lastActiveOrg` cookie names one organization; a chat in another one on the same
+// account is found through the organization list rather than reported missing.
+{
+  const requested = [];
+  const found = await fetchClaudeConversation('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', { organizationId: 'org-one', fetchImpl: async (url) => {
+    const { pathname } = new URL(url);
+    requested.push(pathname);
+    if (pathname === '/api/organizations') return claudeResponse(200, [{ uuid: 'org-one' }, { uuid: 'bad/org' }, { uuid: 'org-two' }]);
+    return pathname.includes('/org-two/') ? claudeResponse(200, { name: 'Other organization', chat_messages: [] }) : claudeResponse(404, {});
+  } });
+  assert.equal(found.name, 'Other organization');
+  assert.deepEqual(requested, [
+    '/api/organizations/org-one/chat_conversations/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    '/api/organizations',
+    '/api/organizations/org-two/chat_conversations/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  ]);
+  // With no cookie at all, the organization list is where the search starts.
+  const noCookie = await fetchClaudeConversation('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', { organizationId: null, fetchImpl: async (url) => (new URL(url).pathname === '/api/organizations' ? claudeResponse(200, [{ uuid: 'org-two' }]) : claudeResponse(200, { name: 'Only organization', chat_messages: [] })) });
+  assert.equal(noCookie.name, 'Only organization');
+  // A 401 is a sign-in problem, not a wrong organization: no fallback requests.
+  let authCalls = 0;
+  const authError = await fetchClaudeConversation('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', { organizationId: 'org-one', fetchImpl: async () => { authCalls += 1; return claudeResponse(401, {}); } }).catch((error) => error);
+  assert.equal(authError.code, 'auth');
+  assert.equal(authCalls, 1);
+}
+// Since chat and Cowork merged, a conversation the chat API does not hold can open from
+// the same list. The 404 report says what kind of ID it was and which requests Claude's
+// page made, as redacted shapes, so the right endpoint can be added.
+{
+  const cse = 'cse_01AbCdEfGhIjKlMnOpQrSt';
+  const notFound = await fetchClaudeConversation(cse, { organizationId: 'org-one', fetchImpl: async (url) => (new URL(url).pathname === '/api/organizations' ? claudeResponse(200, [{ uuid: 'org-two' }]) : claudeResponse(404, {})) }).catch((error) => error);
+  assert.ok(notFound instanceof ClaudeClientError);
+  assert.equal(notFound.code, 'not-found');
+  const report = describeClaudeError(notFound);
+  assert.match(report, /shape of a Cowork task/);
+  assert.match(report, /Conversation ID: "cse_" prefix, 26 characters, not a chat UUID/);
+  assert.match(report, /Organizations checked: 2/);
+  assert.doesNotMatch(report, /01AbCdEf/);
+  const uuidNotFound = await fetchClaudeConversation('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', { organizationId: 'org-one', fetchImpl: async (url) => (new URL(url).pathname === '/api/organizations' ? claudeResponse(500, {}) : claudeResponse(404, {})) }).catch((error) => error);
+  assert.match(describeClaudeError(uuidNotFound), /no conversation with this ID in any organization/);
+  assert.match(describeClaudeError(uuidNotFound), /Organizations checked: 1/);
+  assert.equal(claudeIdFormat('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 'chat UUID');
+  assert.equal(claudeIdFormat('abcdefghijklmnopqrstu'), '21 characters, not a chat UUID');
+  assert.equal(redactClaudePath(`/chat/${cse}`, cse), '/chat/<this-chat>');
+  const shapes = claudeRequestShapes(cse, [
+    { name: 'https://claude.ai/api/organizations/0f8fad5b-d9cb-469f-a165-70867728950e/chat_conversations_v2?limit=30&starred=false' },
+    { name: `https://claude.ai/v1/sessions/${cse}/events?limit=500&cursor=abc` },
+    { name: `https://evil.example/v1/sessions/${cse}` },
+    { name: 'https://claude.ai/_next/static/chunk.js' },
+    { name: 'https://claude.ai/api/organizations/0f8fad5b-d9cb-469f-a165-70867728950e/projects/env_01AbCdEfGhIjKlMn' },
+  ]);
+  assert.deepEqual(shapes.naming, ['/v1/sessions/<this-chat>/events?limit,cursor']);
+  assert.deepEqual(shapes.other, ['/api/organizations/<id>/projects/<env_id>', '/api/organizations/<id>/chat_conversations_v2?limit,starred']);
+}
 
 assert.match(claudeSource, /lastActiveOrg/);
 assert.match(claudeSource, /render_all_tools=true/);
@@ -738,6 +858,17 @@ assert.match(uiSource, /const PREF_KEY = 'chatgpt-thread-archiver-prefs'/);
 assert.match(uiSource, /const LEGACY_PREF_KEY = 'chatgpt-chats-exporter-prefs'/);
 assert.match(uiSource, /function migratePrefsOnce/);
 assert.match(uiSource, /new MutationObserver\(\(\) => install\(\)\)/);
+// The controls live in a shadow root: ChatGPT's stylesheet hid every checkbox and radio
+// button in the export dialog. The page's colour scheme still reaches the dialog.
+assert.match(uiSource, /attachShadow\(\{ mode: 'open' \}\)/);
+assert.match(uiSource, /all: initial !important; color-scheme: inherit !important;/);
+assert.doesNotMatch(uiSource, /document\.head\.appendChild/);
+// Claude's image choice is read from the dialog like ChatGPT's, not from stored prefs.
+assert.match(uiSource, /imageMode: imageChoices\.find\(\(input\) => input\.checked\)\?\.value \?\? prefs\.imageMode,/);
+assert.doesNotMatch(uiSource, /provider === 'ChatGPT' \? \(imageChoices/);
+// One status timer, cleared on every update, so an earlier status cannot hide an error.
+assert.match(uiSource, /window\.clearTimeout\(statusTimer\);/);
+assert.match(uiSource, /statusTimer = isError \? null :/);
 assert.match(uiSource, /bottom: calc\(84px \+ env\(safe-area-inset-bottom/);
 assert.match(uiSource, /bottom: calc\(138px \+ env\(safe-area-inset-bottom/);
 assert.match(assetsSource, /const chunkSize = 0x2000/);
@@ -757,7 +888,7 @@ assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.16\.1/);
+assert.match(buildSource, /@version      0\.16\.2/);
 // The script runs on the whole host so a chat started on the home page gets the button
 // without a reload; the route check decides where the button shows.
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/*\n'));

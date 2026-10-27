@@ -2,11 +2,15 @@
 
 ## Client boundaries
 
-`src/chatgpt-client.mjs` owns ChatGPT route parsing for `/c/`, `/s/`, and `/g/`, same-origin session access, token caching, token invalidation, candidate construction, endpoint allowlisting, account/workspace header discovery, and redacted diagnostics. `src/claude-client.mjs` separately owns Claude route parsing, `lastActiveOrg` organization discovery, the organization-scoped conversation request, branch selection, text normalization, and redacted errors. Keep provider request logic isolated from normalization and rendering because both providers’ internal web-app request paths and response shapes are undocumented and may change independently.
+`src/chatgpt-client.mjs` owns ChatGPT route parsing for `/c/`, `/s/`, and `/g/`, same-origin session access, token caching, token invalidation, candidate construction, endpoint allowlisting, account/workspace header discovery, and redacted diagnostics. `src/claude-client.mjs` separately owns Claude route parsing, `lastActiveOrg` organization discovery, the `/api/organizations` fallback (tried only after a 403 or 404, at most five other organizations), the organization-scoped conversation request, branch selection, text normalization, and redacted errors. A 404 report lists the page's own API requests as path shapes only: the conversation ID becomes `<this-chat>`, other identifiers `<id>`, and query values are dropped. Keep provider request logic isolated from normalization and rendering because both providers’ internal web-app request paths and response shapes are undocumented and may change independently.
 
 The access-token cache is intentionally short-lived: 60 seconds in memory only. A 401/403 causes one cache clear, one session refresh, and one retry. Do not add unbounded retry loops or persist the token. Visibility and observed route transitions clear the cache; the build does not monkeypatch history APIs. Session lookup failures remain distinct and user-visible.
 
 Resource hints are evidence only. They must remain same-origin, match the allowlisted conversation path shape, and be capped before request construction. Claude organization and conversation values must be validated before URL construction. Diagnostics should remain path-only and redacted; never log headers, cookies, response bodies, or full conversation IDs.
+
+## Exporter UI boundary
+
+The button, status panel and dialogs live in an open shadow root on a `<chatgpt-thread-archiver>` host. The host's inline `all: initial !important` keeps the page's inherited styles out; `color-scheme` is inherited on purpose so the dialog follows the site theme. Do not move these elements back into the page DOM: in v0.16.1 ChatGPT's stylesheet hid every checkbox and radio button in the export dialog. The status panel keeps one hide timer, cleared on every update, so a passing status can never hide an error.
 
 ## Renderer boundaries
 

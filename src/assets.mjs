@@ -159,7 +159,10 @@ function bytesToDataUrl(bytes, mime) {
 }
 
 async function fetchImageBytes(fetchImpl, url, headers, timeoutMs, remainingBytes = Infinity, limits = IMAGE_LIMITS, sleep = defaultSleep) {
-  const response = await requestAsset(fetchImpl, url, headers, timeoutMs, sleep);
+  return readImageResponse(await requestAsset(fetchImpl, url, headers, timeoutMs, sleep), remainingBytes, limits);
+}
+
+async function readImageResponse(response, remainingBytes = Infinity, limits = IMAGE_LIMITS) {
   if (!response.ok) return asAssetResult('unavailable', `asset HTTP ${response.status}`);
   const contentType = safeImageMime(response.headers.get('content-type'));
   if (!contentType) return asAssetResult('unavailable', 'asset response was not a supported image');
@@ -203,7 +206,8 @@ async function resolveOneImage(asset, context) {
     }
     const directMime = safeImageMime(response.headers.get('content-type'));
     if (directMime) {
-      const result = await fetchImageBytes(fetchImpl, new URL(path, currentAssetOrigin()).toString(), auth.headers, timeoutMs, remainingBytes, limits, sleep);
+      // This request already returned the image itself; reading it saves a second download.
+      const result = await readImageResponse(response, remainingBytes, limits);
       if (result.status === 'embedded' || result.budgetLimited) return result;
       lastReason = result.reason;
       continue;
@@ -258,7 +262,23 @@ export function resolveClaudeConversationImages(conversation, options = {}) {
 // while ChatGPT's are a pointer that has to be traded for a download URL. Everything
 // around that — selection, budget, caching, the stats the header reports — is identical,
 // so the provider difference is one injected function rather than a second pipeline.
-export async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null, includeImages = true, selectedImageIndices = null, imageIndexOffset = 0, sleep = defaultSleep, resolveOne = resolveOneImage, requiresAuth = true } = {}) {
+// Image totals for the messages an export actually shows, read from each block's resolved
+// status. An all-branches export uses this so an image in a shared message counts once.
+export function summarizeImageStats(messages) {
+  const images = (Array.isArray(messages) ? messages : []).flatMap((message) => (message?.textBlocks ?? []).filter((block) => block.type === 'image'));
+  const embedded = images.filter((block) => block.asset?.status === 'embedded');
+  const excluded = images.filter((block) => block.asset?.status === 'excluded').length;
+  return {
+    imageCount: images.length,
+    imageEmbeddedCount: embedded.length,
+    imageExcludedCount: excluded,
+    imageUnavailableCount: images.length - embedded.length - excluded,
+    imageBytes: embedded.reduce((sum, block) => sum + Number(block.asset?.byteLength ?? 0), 0),
+    imageBudgetLimitedCount: images.filter((block) => block.asset?.budgetLimited).length,
+  };
+}
+
+export async function resolveConversationImages(conversation, { fetchImpl = globalThis.fetch, conversationId, timeoutMs = 20_000, onProgress, limits = IMAGE_LIMITS, authContext = null, includeImages = true, selectedImageIndices = null, imageIndexOffset = 0, sleep = defaultSleep, resolveOne = resolveOneImage, requiresAuth = true, imageCache = new Map() } = {}) {
   if (!conversation || !Array.isArray(conversation.messages)) return conversation;
   const imageBlocks = conversation.messages.flatMap((message) => (message.textBlocks ?? []).filter((block) => block.type === 'image').map((block) => ({ block, postId: message.id })));
   if (imageBlocks.length === 0) return { ...conversation, stats: { ...conversation.stats, imageCount: 0, imageEmbeddedCount: 0, imageExcludedCount: 0, imageUnavailableCount: 0, imageBytes: 0, imageBudgetLimitedCount: 0 } };
@@ -268,7 +288,7 @@ export async function resolveConversationImages(conversation, { fetchImpl = glob
   const shouldInclude = (index) => Boolean(includeImages) && (selected === null || selected.has(index + safeImageIndexOffset));
   const shouldResolveAny = Boolean(includeImages) && (selected === null || selected.size > 0);
   const auth = shouldResolveAny && requiresAuth ? (authContext ?? await getAuthContext(fetchImpl)) : null;
-  const cache = new Map();
+  const cache = imageCache;
   const occurrenceResults = [];
   let completed = 0;
   let embeddedCount = 0;

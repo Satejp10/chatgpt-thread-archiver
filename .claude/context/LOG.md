@@ -233,3 +233,40 @@ the likeliest cause of the missing button. Not confirmed live.
 
 **If Claude still fails:** `diagnostics/claude-incognito-route-probe.js` (paste
 before sending) reports the redacted route shapes of every API request.
+
+## 2026-10-27 — v0.16.2: review fixes, ChatGPT dialog, Claude 404s
+
+**Did:** Owner asked for a scan of the whole repo after a long break. Review found
+four bugs, each confirmed by simulation: ChatGPT exported the previous chat after
+in-app navigation (another chat's resource hint was mapped back to its real path and
+fetched first); emphasis ate underscores and asterisks (`MAX_RETRY_COUNT`, also inside
+code spans); Claude's image choice in the dialog was ignored; a passing status's timer
+hid a later error. Plus shared images fetched, counted and listed once per branch in
+all-branches exports, and a double download on ChatGPT's direct-image path. Owner then
+reported two more: ChatGPT's export dialog shows no checkboxes or radios (choices still
+worked), and some Claude exports fail with "could not find this conversation". All fixed
+in v0.16.2 except the Claude cause itself, which needs live evidence. Review notes saved
+to Box: `Claude Builds/chatgpt-thread-archiver/` (no project folder existed; created it).
+
+**Decided:** Whole UI in a shadow root — isolation covers whatever ChatGPT's rule is.
+Rejected: `!important` input styles, which only cover the rules we guess. Claude 404:
+retry the account's other organizations, then report redacted request shapes. Rejected:
+guessing a Cowork endpoint, or re-fetching URLs the page requested (Resource Timing
+gives no method, and the response shape is unknown).
+
+**Learned:** Claude merged chat and Cowork on 2026-09-16 (Help Center article
+"Claude Cowork and chat are one Claude"); old Cowork tasks sit in Recents with chats;
+incognito chats still open in the previous experience. A third-party GitHub comment
+(anthropics/claude-code#34243, Aug 2026) says Cowork sessions use `cse_` ids, are absent
+from `chat_conversations`, and `chat_conversations/<cse_id>` returns 404. The logged-out
+chatgpt.com page now uses StyleX CSS; its assets cannot be fetched from the build
+environment (Cloudflare 403, Brightdata refused by robots.txt). Playwright with routed
+stand-in pages reproduces UI faults well: the old script showed the owner's exact
+invisible-input dialog under a CSS reset with `appearance: none`.
+
+**Open:** Live acceptance of v0.16.2. Which endpoint serves the conversations that 404:
+the next failing export's error text names the request Claude's page made. Owner
+reports Claude exports label only one message with a model (likely the latest) and the
+rest `unknown`, while ChatGPT finds several: next session. Unconfirmed from the review:
+a new temporary/incognito chat started from inside one may export the previous one until
+its first message.

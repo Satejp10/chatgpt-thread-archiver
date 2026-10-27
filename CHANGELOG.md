@@ -2,6 +2,30 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.16.2] — 2026-10-27
+
+### Fixed
+
+**The export dialog on ChatGPT showed no checkboxes or radio buttons.** ChatGPT's stylesheet hid them. They still worked, so choices took effect without being visible. The button, status panel and dialogs now live in a shadow root that the page's CSS cannot reach, and they still follow the site's light or dark theme.
+
+**Switching chats without a reload could export the previous chat.** On ChatGPT, the exporter turned the page's earlier request for another chat into its first fetch attempt. Only requests for the open chat are used now.
+
+**Underscores and asterisks disappeared from exported text.** `MAX_RETRY_COUNT` came out with italics in place of its underscores, inside inline code and links too, and `x**2 + y**2` lost its asterisks. Emphasis now opens and closes only at word boundaries and never inside a code span.
+
+**Claude ignored the image choice made in the dialog.** v0.15.0 showed the image options to Claude users, but the export still used the previously saved setting. The choice now applies.
+
+**Error messages hid themselves after a few seconds.** A timer left by an earlier status message hid the error that replaced it. An error now stays until the next export.
+
+**All-branches exports downloaded shared images once per branch** and counted each copy in the image totals, and the image chooser listed them once per branch. Each image is now fetched, listed and counted once. A ChatGPT file request that already returns the image is no longer followed by a second download.
+
+### Changed
+
+**Claude 404s: other organizations first, then a report of what Claude's page loaded.** When the organization in the `lastActiveOrg` cookie does not hold the chat, the exporter now tries the account's other organizations (from `/api/organizations`, at most five). If none has it, the error says whether the ID is a regular chat ID, how many organizations were checked, and which API requests Claude's own page made for the chat, as redacted path shapes.
+
+### Notes
+
+**Some Claude conversations still cannot be exported.** Since Claude merged chat and Cowork on 16 September 2026, Cowork tasks open from the same conversation list as chats. A third-party report says Cowork sessions use `cse_` IDs and are not served by the chat API the exporter reads; nothing official says where they are served from. The new error report names the request Claude's page uses for such a conversation, which is what adding support needs.
+
 ## [0.16.1] — 2026-09-23
 
 ### Fixed

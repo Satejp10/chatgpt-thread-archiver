@@ -2,6 +2,24 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.16.3] — 2026-10-27
+
+### Fixed
+
+**The Claude 404 report listed the exporter's own request as one Claude's page made.** The line `…/chat_conversations/<this-chat>?tree,rendering_mode,render_all_tools` in v0.16.2's report has the exporter's query; Claude's page asks with two more parameters. Both kinds of request land in the same browser log, and the report did not tell them apart. The exporter now remembers its own requests and leaves them out. Each request shows its HTTP status where the browser records one (Chromium does), the page's other recent requests are always listed, and data requests the page made outside `/api` are included. The report also says whether the organization Claude's page used was among those checked, and lists each retry with its status.
+
+### Changed
+
+**Claude 404s: up to three more tries, made the way Claude's page asks.** When every organization on the account refuses the chat, the exporter asks again in the organization Claude's page used for it, with the exact query Claude's page sent (only a GET for the message tree the exporter reads), and with `consistency=strong`, which Claude's page adds and the exporter did not. A chat that already exported still takes one request.
+
+**Claude replies: the model is read wherever a reply names one.** Any field on a reply whose name mentions a model, outside the reply's content, is read when its value is a Claude model ID (`claude-…`). When no reply names a model, the header now reads `Chat model: claude-opus-5-5 (Claude’s data names no model for individual replies)` instead of a bare `Model:`, which read as the model of every reply. Replies without a model keep `Model: unknown / not found`.
+
+### Notes
+
+**Whether Claude records each reply's model is unconfirmed.** In the owner's test, one prompt retried with Haiku, Sonnet and Opus 5.5 exported with only Opus 5.5, the chat's model. No public capture of Claude's chat API shows a model on a reply, only one `model` for the whole chat, and other exporters read only that. `diagnostics/claude-reply-model-probe.js` settles it with one console paste.
+
+**The cause of the remaining Claude 404s is still unknown.** The new tries cover two guesses: a read from data that has not caught up yet, which `consistency=strong` appears to guard against, and an organization or query that only Claude's page uses. If they fail, the report shows what Claude's page actually requested for the chat and what it got back.
+
 ## [0.16.2] — 2026-10-27
 
 ### Fixed

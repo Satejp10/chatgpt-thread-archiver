@@ -1,4 +1,4 @@
-const ARCHIVER_VERSION = '0.16.2';
+const ARCHIVER_VERSION = '0.16.3';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -741,6 +741,13 @@ function formatModels(conversation) {
   }
   if (models.length === 0) return '';
   const uniqueModels = [...new Set(models)];
+  // With no model on any reply, the one name left is the conversation's own model field.
+  // A bare "Model:" read as the model of every reply: in the owner's test, a Claude chat
+  // retried with Haiku, Sonnet and then Opus 5.5 named only Opus 5.5 there.
+  const stats = conversation?.stats ?? {};
+  if (conversation?.provider === 'Claude' && uniqueModels.length === 1 && stats.replyModelCount === 0 && stats.assistantMessageCount > 0) {
+    return `<p class="meta">Chat model: ${escapeHtml(uniqueModels[0])} (Claude’s data names no model for individual replies)</p>`;
+  }
   const label = uniqueModels.length === 1 ? 'Model' : 'Models used';
   return `<p class="meta">${label}: ${escapeHtml(uniqueModels.join(', '))}</p>`;
 }

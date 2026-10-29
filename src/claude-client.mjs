@@ -42,7 +42,7 @@ export function installClaudeIncognitoObserver() {
   if (claudeIncognitoState.observer || typeof globalThis.PerformanceObserver !== 'function') return;
   try {
     claudeIncognitoState.observer = new globalThis.PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) claudeIncognitoState.observed.push({ name: entry.name, startTime: entry.startTime });
+      for (const entry of list.getEntries()) claudeIncognitoState.observed.push({ name: entry.name, startTime: entry.startTime, responseStatus: entry.responseStatus, initiatorType: entry.initiatorType });
       claudeIncognitoState.observed.splice(0, Math.max(0, claudeIncognitoState.observed.length - 200));
     });
     claudeIncognitoState.observer.observe({ type: 'resource', buffered: true });
@@ -160,28 +160,99 @@ export function redactClaudePath(pathname, conversationId = '') {
   return String(pathname ?? '').split('/').map((segment) => claudeSegmentShape(segment, String(conversationId ?? ''))).join('/');
 }
 
-// The page's own API requests, reduced to path shapes with every identifier replaced and
-// query values dropped. Requests naming this conversation come first: they show which
-// endpoint Claude's page itself used to load it.
-export function claudeRequestShapes(conversationId, entries = null, limit = 8) {
+function claudeNow() {
+  const now = Number(globalThis.performance?.now?.());
+  return Number.isFinite(now) ? now : 0;
+}
+
+// The exporter's own requests land in the same Resource Timing buffer as the page's. Each
+// is remembered with its time window so a 404 report never lists one of them as a request
+// Claude's page made. v0.16.2's report did, and it read as the page using the same address.
+const claudeOwnRequests = [];
+
+function isOwnClaudeRequest(entry, own) {
+  const start = Number(entry?.startTime);
+  return own.some((request) => request.url === String(entry?.name ?? '') && start >= request.start - 1 && start <= request.end + 1);
+}
+
+// The page's own same-origin API requests, newest first, plus any other data request it
+// made with fetch or XHR: a chat that is not loaded through the API may come through a
+// page-data request instead. A status is present only where the browser reports one:
+// Chromium does, some other browsers do not.
+function claudePageRequests(conversationId, entries = null, own = claudeOwnRequests) {
   const id = String(conversationId ?? '');
   const source = entries ?? [...(globalThis.performance?.getEntriesByType?.('resource') ?? []), ...claudeIncognitoState.observed];
-  const naming = [];
-  const other = [];
-  for (const entry of [...source].reverse()) {
+  const ordered = [...source].reverse().sort((left, right) => (Number(right?.startTime) || 0) - (Number(left?.startTime) || 0));
+  const seen = new Set();
+  const requests = [];
+  for (const entry of ordered) {
+    const key = `${entry?.name}\u0000${entry?.startTime}`;
+    if (seen.has(key) || isOwnClaudeRequest(entry, own)) continue;
+    seen.add(key);
     let parsed;
     try {
       parsed = new URL(String(entry?.name ?? ''), currentClaudeOrigin());
     } catch {
       continue;
     }
-    if (parsed.origin !== currentClaudeOrigin() || !/^\/(?:api|v1)\//.test(parsed.pathname)) continue;
-    const keys = [...new Set(parsed.searchParams.keys())].filter((key) => /^[A-Za-z_]{1,40}$/.test(key)).slice(0, 6);
-    const shape = `${redactClaudePath(parsed.pathname, id)}${keys.length ? `?${keys.join(',')}` : ''}`;
-    const list = id && (parsed.pathname.split('/').includes(id) || [...parsed.searchParams.values()].includes(id)) ? naming : other;
+    if (parsed.origin !== currentClaudeOrigin()) continue;
+    if (!/^\/(?:api|v1)\//.test(parsed.pathname) && !['fetch', 'xmlhttprequest'].includes(String(entry?.initiatorType ?? ''))) continue;
+    const status = Number(entry?.responseStatus);
+    const organization = parsed.pathname.match(/^\/api\/organizations\/([^/]+)\//)?.[1] ?? '';
+    requests.push({
+      parsed,
+      status: Number.isInteger(status) && status > 0 ? status : null,
+      organization: CLAUDE_ORG_RE.test(organization) ? organization : null,
+      namesChat: Boolean(id) && (parsed.pathname.split('/').includes(id) || [...parsed.searchParams.values()].includes(id)),
+      loadsChat: Boolean(id) && Boolean(organization) && parsed.pathname === `/api/organizations/${organization}/chat_conversations/${id}`,
+    });
+  }
+  return requests;
+}
+
+// The page's own API requests, reduced to path shapes with every identifier replaced and
+// query values dropped. Requests naming this conversation come first: they show which
+// endpoint Claude's page itself used to load it.
+export function claudeRequestShapes(conversationId, entries = null, limit = 8, own = claudeOwnRequests) {
+  const id = String(conversationId ?? '');
+  const naming = [];
+  const other = [];
+  for (const request of claudePageRequests(id, entries, own)) {
+    const keys = [...new Set(request.parsed.searchParams.keys())].filter((key) => /^[A-Za-z_]{1,40}$/.test(key)).slice(0, 6);
+    const shape = `${redactClaudePath(request.parsed.pathname, id)}${keys.length ? `?${keys.join(',')}` : ''}${request.status ? ` (HTTP ${request.status})` : ''}`;
+    const list = request.namesChat ? naming : other;
     if (!list.includes(shape)) list.push(shape);
   }
   return { naming: naming.slice(0, limit), other: other.slice(0, limit) };
+}
+
+const CLAUDE_QUERY_KEY_RE = /^[A-Za-z_]{1,40}$/;
+const CLAUDE_QUERY_VALUE_RE = /^[A-Za-z0-9_.-]{0,40}$/;
+
+// Retries after a 404, each built from evidence. Claude's page names the organization it
+// used in its requests for this chat, and its own conversation request shows the query it
+// sent. Both are evidence only: same origin, the allowlisted path shape, validated
+// identifiers and a short allowlisted query. Resource Timing does not record a method, so
+// the page's request is never repeated as such: the exporter sends a GET, and only for a
+// query asking for the message tree the normalizer reads. Claude's page also asks with
+// `consistency=strong` (seen in a September 2026 capture); the plain request does not.
+function claudeRetryPaths(conversationId, fallbackOrganization, entries = null) {
+  const id = String(conversationId ?? '');
+  const paths = [];
+  for (const request of claudePageRequests(id, entries)) {
+    if (!request.namesChat || !request.organization) continue;
+    paths.push({ label: 'organization Claude’s page used', organization: request.organization, path: claudeConversationPath(request.organization, id) });
+    const pairs = [...request.parsed.searchParams];
+    const asksForTree = /^true$/i.test(request.parsed.searchParams.get('tree') ?? '') && request.parsed.searchParams.get('rendering_mode') === 'messages';
+    if (request.loadsChat && asksForTree && pairs.length <= 8 && pairs.every(([key, value]) => CLAUDE_QUERY_KEY_RE.test(key) && CLAUDE_QUERY_VALUE_RE.test(value))) {
+      const query = new URLSearchParams(pairs).toString();
+      paths.push({ label: 'exact request Claude’s page made', organization: request.organization, path: `/api/organizations/${encodeURIComponent(request.organization)}/chat_conversations/${encodeURIComponent(id)}${query ? `?${query}` : ''}` });
+    }
+  }
+  const organization = paths[0]?.organization ?? fallbackOrganization;
+  const plain = claudeConversationPath(organization, id);
+  if (plain) paths.push({ label: 'consistency=strong', organization, path: `${plain}&consistency=strong` });
+  return paths;
 }
 
 async function fetchClaudeWithTimeout(fetchImpl, url, options, timeoutMs) {
@@ -198,8 +269,12 @@ async function fetchClaudeWithTimeout(fetchImpl, url, options, timeoutMs) {
 }
 
 async function claudeGet(fetchImpl, path, timeoutMs) {
+  const url = new URL(path, currentClaudeOrigin()).toString();
+  const own = { url, start: claudeNow(), end: Number.POSITIVE_INFINITY };
+  claudeOwnRequests.push(own);
+  claudeOwnRequests.splice(0, Math.max(0, claudeOwnRequests.length - 50));
   try {
-    return await fetchClaudeWithTimeout(fetchImpl, new URL(path, currentClaudeOrigin()).toString(), {
+    return await fetchClaudeWithTimeout(fetchImpl, url, {
       method: 'GET',
       credentials: 'same-origin',
       headers: { Accept: 'application/json' },
@@ -208,6 +283,8 @@ async function claudeGet(fetchImpl, path, timeoutMs) {
   } catch (error) {
     if (error instanceof ClaudeClientError) throw error;
     throw new ClaudeClientError('network', 'The browser could not reach Claude.');
+  } finally {
+    own.end = claudeNow();
   }
 }
 
@@ -227,33 +304,43 @@ async function listClaudeOrganizations(fetchImpl, timeoutMs) {
 
 // Cowork sessions have been reported (not documented) to use `cse_` ids and to be absent
 // from the chat API. Since the September 2026 merge they open from the same conversation
-// list as chats, so the button can appear on one.
-function claudeNotFoundError(conversationId, organizationsTried) {
+// list as chats, so the button can appear on one. Where the browser recorded what Claude's
+// own page got when it asked the chat API for this chat, the message follows that instead.
+function claudeNotFoundError(conversationId, { tried, retries, entries = null }) {
   const id = String(conversationId ?? '');
-  const message = CLAUDE_UUID_RE.test(id)
-    ? 'Claude’s chat API has no conversation with this ID in any organization on this account. Since chat and Cowork merged, a conversation that ran as a Cowork task may be stored outside the chat API this exporter reads.'
-    : id.startsWith('cse_')
-      ? 'This ID has the shape of a Cowork task (“cse_…”), and Claude’s chat API has no conversation with it. Claude stores Cowork tasks outside the chat API this exporter reads, so it cannot export them yet.'
-      : 'This is not a regular Claude chat ID, and Claude’s chat API has no conversation with it. Since chat and Cowork merged, some conversations are stored outside the chat API this exporter reads.';
-  const requests = claudeRequestShapes(conversationId);
+  const pageRequests = claudePageRequests(id, entries);
+  const pageLoad = pageRequests.find((request) => request.loadsChat && request.status);
+  const pageOrganizations = [...new Set(pageRequests.filter((request) => request.namesChat && request.organization).map((request) => request.organization))];
+  let message;
+  if (pageLoad && pageLoad.status >= 200 && pageLoad.status < 300) message = 'Claude’s page loaded this chat from the same chat API, but Claude refused every request the exporter made for it. Claude’s page sends something the exporter does not.';
+  else if (pageLoad) message = `Claude’s chat API also answered ${pageLoad.status} to Claude’s own page for this chat, so the page loads it from somewhere else. Its other requests are listed below.`;
+  else if (CLAUDE_UUID_RE.test(id)) message = 'Claude’s chat API has no conversation with this ID in any organization on this account. Since chat and Cowork merged, a conversation that ran as a Cowork task may be stored outside the chat API this exporter reads.';
+  else if (id.startsWith('cse_')) message = 'This ID has the shape of a Cowork task (“cse_…”), and Claude’s chat API has no conversation with it. Claude stores Cowork tasks outside the chat API this exporter reads, so it cannot export them yet.';
+  else message = 'This is not a regular Claude chat ID, and Claude’s chat API has no conversation with it. Since chat and Cowork merged, some conversations are stored outside the chat API this exporter reads.';
+  const requests = claudeRequestShapes(id, entries);
+  const query = [...new URLSearchParams(globalThis.location?.search ?? '').keys()].filter((key) => CLAUDE_QUERY_KEY_RE.test(key)).slice(0, 4);
   return new ClaudeClientError('not-found', message, {
-    pagePath: redactClaudePath(globalThis.location?.pathname ?? '', conversationId),
-    idFormat: claudeIdFormat(conversationId),
-    organizationsTried,
+    pagePath: `${redactClaudePath(globalThis.location?.pathname ?? '', id)}${query.length ? `?${query.join(',')}` : ''}`,
+    idFormat: claudeIdFormat(id),
+    organizationsTried: tried.size,
+    pageOrganizationChecked: pageOrganizations.length ? pageOrganizations.every((organization) => tried.has(organization)) : null,
+    retries,
     pageRequests: requests.naming,
-    recentRequests: requests.naming.length ? [] : requests.other,
+    recentRequests: requests.other.slice(0, 6),
   });
 }
 
-export async function fetchClaudeConversation(conversationId, { fetchImpl = globalThis.fetch, timeoutMs = CLAUDE_TIMEOUT_MS, organizationId = getClaudeOrganizationId() } = {}) {
+export async function fetchClaudeConversation(conversationId, { fetchImpl = globalThis.fetch, timeoutMs = CLAUDE_TIMEOUT_MS, organizationId = getClaudeOrganizationId(), resourceEntries = null } = {}) {
   if (!conversationId) throw new ClaudeClientError('missing-id', 'Open a Claude conversation before exporting.');
   if (typeof fetchImpl !== 'function') throw new ClaudeClientError('no-fetch', 'This browser does not provide fetch().');
   if (!CLAUDE_CONVERSATION_ID_RE.test(String(conversationId))) throw new ClaudeClientError('invalid-route', 'The Claude conversation route is not recognized.');
 
   const tried = new Set();
-  const request = (org) => {
+  const requested = new Set();
+  const request = (org, path = claudeConversationPath(org, conversationId)) => {
     tried.add(org);
-    return claudeGet(fetchImpl, claudeConversationPath(org, conversationId), timeoutMs);
+    requested.add(path);
+    return claudeGet(fetchImpl, path, timeoutMs);
   };
   let response = organizationId && CLAUDE_ORG_RE.test(organizationId) ? await request(organizationId) : null;
   if (!response || response.status === 403 || response.status === 404) {
@@ -275,10 +362,35 @@ export async function fetchClaudeConversation(conversationId, { fetchImpl = glob
     }
     if (!response && fallbackError) throw fallbackError;
   }
+  // Still refused in every organization the account lists: ask the way Claude's own page
+  // asks, at most three more times. A conversation that already exports never gets here,
+  // so its request is unchanged.
+  const retries = [];
+  if (response?.status === 403 || response?.status === 404) {
+    const fallbackOrganization = organizationId && CLAUDE_ORG_RE.test(organizationId) ? organizationId : [...tried][0];
+    const candidates = [];
+    for (const candidate of claudeRetryPaths(conversationId, fallbackOrganization, resourceEntries)) {
+      if (candidate.path && !requested.has(candidate.path) && !candidates.some((other) => other.path === candidate.path)) candidates.push(candidate);
+    }
+    for (const candidate of candidates.slice(0, 3)) {
+      let next;
+      try {
+        next = await request(candidate.organization, candidate.path);
+      } catch {
+        retries.push(`${candidate.label} (no response)`);
+        continue;
+      }
+      retries.push(`${candidate.label} (HTTP ${next.status})`);
+      if (next.ok) {
+        response = next;
+        break;
+      }
+    }
+  }
   if (!response) throw new ClaudeClientError('missing-organization', 'Claude session information was not found. Sign in, reload the conversation, and retry.');
 
   if (response.status === 401 || response.status === 403) throw new ClaudeClientError('auth', `Claude rejected the conversation request (${response.status}). Sign in again, then retry.`);
-  if (response.status === 404) throw claudeNotFoundError(conversationId, tried.size);
+  if (response.status === 404) throw claudeNotFoundError(conversationId, { tried, retries, entries: resourceEntries });
   if (response.status === 429) throw new ClaudeClientError('rate-limit', 'Claude is rate-limiting the request. Wait briefly and retry.');
   if (!response.ok) throw new ClaudeClientError('http', `Claude returned HTTP ${response.status}.`);
 
@@ -385,6 +497,29 @@ function claudeToolResultBlock(block) {
   };
 }
 
+// No published source shows a model on a Claude reply: a September 2026 capture of this
+// response has `model` only at the top, for the whole chat, and other exporters read only
+// that. A reply retried with another model may still carry one under a name nobody has
+// published, so any field whose name mentions a model is read, outside the reply's own
+// content, and only when its value is a Claude model identifier.
+const CLAUDE_MODEL_ID_RE = /^claude[A-Za-z0-9._:-]{1,100}$/i;
+const CLAUDE_CONTENT_KEYS = new Set(['content', 'text', 'attachments', 'files', 'files_v2', 'sync_sources']);
+
+function claudeReplyModel(value, depth = 0) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || depth > 2) return null;
+  for (const [key, field] of Object.entries(value)) {
+    if (CLAUDE_CONTENT_KEYS.has(key)) continue;
+    if (/model/i.test(key)) {
+      const candidates = typeof field === 'string' ? [field] : [field?.id, field?.name, field?.slug, field?.model];
+      const model = candidates.map((candidate) => (typeof candidate === 'string' ? candidate.trim() : '')).find((candidate) => CLAUDE_MODEL_ID_RE.test(candidate));
+      if (model) return model;
+    }
+    const nested = claudeReplyModel(field, depth + 1);
+    if (nested) return nested;
+  }
+  return null;
+}
+
 function normalizeClaudeMessage(message, index) {
   const sender = String(message?.sender ?? 'unknown').toLowerCase();
   const role = sender === 'human' ? 'user' : sender === 'assistant' ? 'assistant' : 'unknown';
@@ -453,7 +588,7 @@ function normalizeClaudeMessage(message, index) {
     authorLabel: hidden ? `${label} (hidden by Claude)` : label,
     createdAt: message?.created_at ?? message?.createdAt ?? null,
     parentId: message?.parent_message_uuid ?? message?.parent ?? null,
-    modelSlug: typeof message?.model === 'string' && message.model.trim() ? message.model.trim() : (typeof message?.model_slug === 'string' && message.model_slug.trim() ? message.model_slug.trim() : null),
+    modelSlug: typeof message?.model === 'string' && message.model.trim() ? message.model.trim() : (typeof message?.model_slug === 'string' && message.model_slug.trim() ? message.model_slug.trim() : (role === 'assistant' ? claudeReplyModel(message) : null)),
     textBlocks,
     omittedCount,
     hidden,
@@ -604,8 +739,13 @@ export function describeClaudeError(error) {
   const lines = [error.message];
   if (details.pagePath) lines.push(`Page path: ${details.pagePath}`);
   if (details.idFormat) lines.push(`Conversation ID: ${details.idFormat}`);
-  if (Number.isInteger(details.organizationsTried)) lines.push(`Organizations checked: ${details.organizationsTried}`);
-  if (details.pageRequests?.length) lines.push(`Requests Claude’s page made for this chat: ${details.pageRequests.join(' | ')}`);
-  if (details.recentRequests?.length) lines.push(`Claude’s page made no request naming this chat. Its recent API requests: ${details.recentRequests.join(' | ')}`);
+  if (Number.isInteger(details.organizationsTried)) {
+    const pageOrganization = details.pageOrganizationChecked === true ? ', including the one Claude’s page used' : details.pageOrganizationChecked === false ? ', not including the one Claude’s page used' : '';
+    lines.push(`Organizations checked: ${details.organizationsTried}${pageOrganization}`);
+  }
+  if (details.retries?.length) lines.push(`Retries: ${details.retries.join(' | ')}`);
+  if (details.pageRequests?.length) lines.push(`Claude’s page, requests naming this chat: ${details.pageRequests.join(' | ')}`);
+  else if (details.pageRequests) lines.push('Claude’s page made no recorded request naming this chat.');
+  if (details.recentRequests?.length) lines.push(`Claude’s page, other recent API requests: ${details.recentRequests.join(' | ')}`);
   return lines.join('\n');
 }

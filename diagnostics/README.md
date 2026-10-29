@@ -202,3 +202,17 @@ needed if v0.16.1 still shows no button there. Paste it on a fresh `claude.ai/ne
 page, then send a message; the report prints 45 seconds after pasting. It lists same-origin
 `/api/` request paths with every id-like segment replaced by `<id>` and query parameter
 names only. No ids, text, tokens or cookies. Delete with the rest of this directory.
+
+## `claude-reply-model-probe.js`
+
+Answers one question: **does Claude record which model wrote each reply?** Only needed
+if a v0.16.3 export of a chat retried with different models still shows
+`Model: unknown / not found` on its replies. Paste it in the DevTools console on that
+chat. It reads the chat twice, the way the exporter asks and the way Claude's page asks
+(`include_inline_comparison`, `consistency=strong`), and lists, for each reply, any
+model value found outside the reply's content, then the field names seen on replies and
+on the chat. A value is printed only when it is a short identifier and its field name
+mentions a model or the value starts with `claude`. Content, tool inputs, ids, text,
+tokens and cookies are never printed. If a reply shows a model under a field name the
+exporter does not read, wire that field into `claudeReplyModel()` in
+`src/claude-client.mjs`. Delete with the rest of this directory.

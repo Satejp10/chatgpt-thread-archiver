@@ -95,6 +95,8 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Claude image choice (v0.16.2) | On a Claude chat with an uploaded image, pick **Exclude all images** and export | The file shows `[image excluded by export settings]` and no image is downloaded |
 | Errors stay visible (v0.16.2) | Trigger any export error | The error panel stays on screen until the next export |
 | Claude 404 report (v0.16.2) | Export a Claude conversation that fails with a 404 | The error states the ID format, the organizations checked and the page's own request shapes; no full IDs appear |
+| Claude 404 retries (v0.16.3) | Reload the Claude chat that failed with a 404, wait for it to finish loading, then export | Either the chat exports, or the error lists `Retries:` with a status for each and the page's requests with `(HTTP nnn)`; no full IDs appear |
+| Claude model labels (v0.16.3) | On a Claude chat whose reply was retried with different models, choose **All branches** and export | Each reply shows its model and the header reads `Models used: …`, or, if Claude's data names none, the header reads `Chat model: … (Claude’s data names no model for individual replies)` and replies read `Model: unknown / not found` |
 
 ## Failure report template
 

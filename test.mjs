@@ -47,8 +47,8 @@ assert.match(simpleHtml, /class="copy-btn"/);
 assert.match(simpleHtml, /querySelector\("\.content"\)/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.16\.2"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.2/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.16\.3"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.3/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -215,7 +215,7 @@ assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.2/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.3/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -760,6 +760,162 @@ await assert.rejects(() => fetchClaudeConversation('aaaaaaaa-aaaa-4aaa-8aaa-aaaa
   assert.deepEqual(shapes.other, ['/api/organizations/<id>/projects/<env_id>', '/api/organizations/<id>/chat_conversations_v2?limit,starred']);
 }
 
+// v0.16.2's report listed the exporter's own requests as the page's. They are recognised
+// by address and time window now, and each page request carries its status where the
+// browser reports one.
+{
+  const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const org = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  const base = `https://claude.ai/api/organizations/${org}/chat_conversations/${id}`;
+  const ownUrl = `${base}?tree=true&rendering_mode=messages&render_all_tools=true`;
+  const own = [{ url: ownUrl, start: 100, end: 150 }];
+  const shapes = claudeRequestShapes(id, [
+    { name: `${base}?tree=True&rendering_mode=messages&render_all_tools=true&include_inline_comparison=true&consistency=strong`, startTime: 10, responseStatus: 200 },
+    { name: `${base}/composer_notices`, startTime: 12, responseStatus: 200 },
+    { name: `https://claude.ai/api/organizations/${org}/chat_conversations_v2?limit=30`, startTime: 11 },
+    { name: ownUrl, startTime: 120, responseStatus: 404 },
+  ], 8, own);
+  assert.deepEqual(shapes.naming, [
+    '/api/organizations/<id>/chat_conversations/<this-chat>/composer_notices (HTTP 200)',
+    '/api/organizations/<id>/chat_conversations/<this-chat>?tree,rendering_mode,render_all_tools,include_inline_comparison,consistency (HTTP 200)',
+  ]);
+  assert.deepEqual(shapes.other, ['/api/organizations/<id>/chat_conversations_v2?limit']);
+  // The same address outside the exporter's own time window is the page's request.
+  assert.deepEqual(claudeRequestShapes(id, [{ name: ownUrl, startTime: 20, responseStatus: 200 }], 8, own).naming, ['/api/organizations/<id>/chat_conversations/<this-chat>?tree,rendering_mode,render_all_tools (HTTP 200)']);
+  // A page-data request outside the API counts when the page made it with fetch or XHR;
+  // scripts and other assets never do.
+  const pageData = claudeRequestShapes(id, [
+    { name: `https://claude.ai/chat/${id}?_rsc=1x2y`, startTime: 3, responseStatus: 200, initiatorType: 'fetch' },
+    { name: 'https://claude.ai/_next/static/chunks/app.js', startTime: 2, responseStatus: 200, initiatorType: 'script' },
+    { name: `https://claude.ai/chat/${id}`, startTime: 1, responseStatus: 200, initiatorType: 'navigation' },
+  ], 8, []);
+  assert.deepEqual(pageData, { naming: ['/chat/<this-chat>?_rsc (HTTP 200)'], other: [] });
+}
+
+// After a 404 in every listed organization, the exporter asks the way Claude's own page
+// asks: in the organization the page's requests name, with the page's own query, or with
+// `consistency=strong`. A chat that exports on the first request never gets here.
+{
+  const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const pageOrg = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  const isList = (url) => new URL(url).pathname === '/api/organizations';
+  let firstTryCalls = 0;
+  await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [], fetchImpl: async () => { firstTryCalls += 1; return claudeResponse(200, { name: 'First try', chat_messages: [] }); } });
+  assert.equal(firstTryCalls, 1);
+
+  const requested = [];
+  const strong = await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [], fetchImpl: async (url) => {
+    requested.push(url.replace('https://claude.ai', ''));
+    if (isList(url)) return claudeResponse(200, [{ uuid: 'org-one' }]);
+    return url.includes('consistency=strong') ? claudeResponse(200, { name: 'Strong read', chat_messages: [] }) : claudeResponse(404, {});
+  } });
+  assert.equal(strong.name, 'Strong read');
+  assert.deepEqual(requested, [
+    `/api/organizations/org-one/chat_conversations/${id}?tree=true&rendering_mode=messages&render_all_tools=true`,
+    '/api/organizations',
+    `/api/organizations/org-one/chat_conversations/${id}?tree=true&rendering_mode=messages&render_all_tools=true&consistency=strong`,
+  ]);
+
+  // An organization only the page's requests name; a cross-origin entry is ignored.
+  const orgPaths = [];
+  const fromPageOrg = await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [
+    { name: `https://claude.ai/api/organizations/${pageOrg}/chat_conversations/${id}/composer_notices`, startTime: 5, responseStatus: 200 },
+    { name: `https://evil.example/api/organizations/attacker-org/chat_conversations/${id}`, startTime: 6 },
+  ], fetchImpl: async (url) => {
+    orgPaths.push(new URL(url).pathname);
+    if (isList(url)) return claudeResponse(200, [{ uuid: 'org-one' }]);
+    return url.includes(`/${pageOrg}/`) ? claudeResponse(200, { name: 'Page organization', chat_messages: [] }) : claudeResponse(404, {});
+  } });
+  assert.equal(fromPageOrg.name, 'Page organization');
+  assert.ok(!orgPaths.some((path) => path.includes('attacker-org')));
+
+  // The page's exact conversation request, query and all. The plain request in the same
+  // organization was already made, so it is not repeated.
+  const exactUrls = [];
+  const exact = await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [
+    { name: `https://claude.ai/api/organizations/org-one/chat_conversations/${id}?tree=True&rendering_mode=messages&render_all_tools=true&include_inline_comparison=true&consistency=strong`, startTime: 5, responseStatus: 200 },
+  ], fetchImpl: async (url) => {
+    exactUrls.push(url);
+    if (isList(url)) return claudeResponse(200, []);
+    return url.includes('include_inline_comparison=true') ? claudeResponse(200, { name: 'Exact request', chat_messages: [] }) : claudeResponse(404, {});
+  } });
+  assert.equal(exact.name, 'Exact request');
+  assert.equal(exactUrls.length, 3);
+
+  // A page query with a value outside the allowlist, or one not asking for the message
+  // tree the normalizer reads, is never replayed.
+  const unsafeUrls = [];
+  await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [
+    { name: `https://claude.ai/api/organizations/org-one/chat_conversations/${id}?tree=True&rendering_mode=messages&next=%2Fapi%2Fx`, startTime: 3 },
+    { name: `https://claude.ai/api/organizations/org-one/chat_conversations/${id}?tree=True&rendering_mode=raw&marker=raw`, startTime: 4 },
+  ], fetchImpl: async (url) => { unsafeUrls.push(url); return isList(url) ? claudeResponse(200, []) : claudeResponse(404, {}); } }).catch(() => null);
+  assert.ok(unsafeUrls.length > 0 && !unsafeUrls.some((url) => url.includes('next=') || url.includes('marker=')));
+
+  // Nothing works: at most three retries, and the report says what the page got, without
+  // any identifier.
+  let calls = 0;
+  const failed = await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [
+    { name: `https://claude.ai/api/organizations/${pageOrg}/chat_conversations/${id}?tree=True&rendering_mode=messages&consistency=strong`, startTime: 9, responseStatus: 200 },
+    { name: `https://claude.ai/api/organizations/7c9e6679-7425-40de-944b-e07fc1f90ae7/chat_conversations/${id}/composer_notices`, startTime: 8, responseStatus: 200 },
+    { name: `https://claude.ai/api/organizations/${pageOrg}/chat_conversations_v2?limit=30`, startTime: 7, responseStatus: 200 },
+  ], fetchImpl: async (url) => { calls += 1; return isList(url) ? claudeResponse(200, [{ uuid: 'org-one' }]) : claudeResponse(404, {}); } }).catch((error) => error);
+  assert.equal(failed.code, 'not-found');
+  assert.equal(calls, 2 + 3, 'cookie organization, account list, then at most three retries');
+  const report = describeClaudeError(failed);
+  assert.match(report, /^Claude’s page loaded this chat from the same chat API, but Claude refused every request the exporter made for it/);
+  assert.match(report, /Organizations checked: 3, including the one Claude’s page used/);
+  assert.match(report, /Retries: organization Claude’s page used \(HTTP 404\) \| exact request Claude’s page made \(HTTP 404\) \| organization Claude’s page used \(HTTP 404\)/);
+  assert.match(report, /Claude’s page, requests naming this chat: \/api\/organizations\/<id>\/chat_conversations\/<this-chat>\?tree,rendering_mode,consistency \(HTTP 200\) \| \/api\/organizations\/<id>\/chat_conversations\/<this-chat>\/composer_notices \(HTTP 200\)/);
+  assert.match(report, /Claude’s page, other recent API requests: \/api\/organizations\/<id>\/chat_conversations_v2\?limit \(HTTP 200\)/);
+  assert.doesNotMatch(report, new RegExp(`${pageOrg}|${id}|7c9e6679|org-one`));
+
+  // The page got a 404 too: it loads this chat from somewhere else.
+  const pageMissing = await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [
+    { name: `https://claude.ai/api/organizations/org-one/chat_conversations/${id}?tree=True`, startTime: 3, responseStatus: 404 },
+  ], fetchImpl: async (url) => (isList(url) ? claudeResponse(200, []) : claudeResponse(404, {})) }).catch((error) => error);
+  assert.match(describeClaudeError(pageMissing), /^Claude’s chat API also answered 404 to Claude’s own page for this chat/);
+  // No page request recorded for the chat at all.
+  const unrecorded = await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [], fetchImpl: async (url) => (isList(url) ? claudeResponse(200, []) : claudeResponse(404, {})) }).catch((error) => error);
+  assert.match(describeClaudeError(unrecorded), /Retries: consistency=strong \(HTTP 404\)/);
+  assert.match(describeClaudeError(unrecorded), /Claude’s page made no recorded request naming this chat\./);
+}
+
+// No published capture shows a model on a Claude reply. If a reply carries one under any
+// name outside its content, it is read; a tool's input and a non-Claude value never are.
+{
+  const conversation = normalizeClaudeConversation({
+    name: 'Models',
+    model: 'claude-opus-5-5',
+    current_leaf_message_uuid: 'r3',
+    chat_messages: [
+      { uuid: 'p', sender: 'human', content: [{ type: 'text', text: 'hi' }], model_hint: 'claude-prompt-side' },
+      { uuid: 'r1', parent_message_uuid: 'p', sender: 'assistant', content: [{ type: 'text', text: 'one' }], metadata: { generation: { model_name: 'claude-haiku-4-5-20251001' } } },
+      { uuid: 'r2', parent_message_uuid: 'p', sender: 'assistant', content: [{ type: 'tool_use', name: 'lookup', input: { model: 'claude-from-tool-input' } }, { type: 'text', text: 'two' }], model_selection: 'user_choice' },
+      { uuid: 'r3', parent_message_uuid: 'p', sender: 'assistant', content: [{ type: 'text', text: 'three' }], model: 'claude-opus-5-5' },
+    ],
+  }, 'models-id');
+  const models = new Map(conversation.branches.flatMap((branch) => branch.messages).map((message) => [message.id, message.modelSlug]));
+  assert.equal(models.get('p'), null);
+  assert.equal(models.get('r1'), 'claude-haiku-4-5-20251001');
+  assert.equal(models.get('r2'), null);
+  assert.equal(models.get('r3'), 'claude-opus-5-5');
+  const shown = messagesFromBranchTree(conversation.branchTree);
+  const modelsHtml = renderConversationHtml({ ...conversation, stats: deriveExportStats(shown, conversation.stats, { model: conversation.model }) }, { includeAllBranches: true });
+  assert.match(modelsHtml, /Models used: claude-opus-5-5, claude-haiku-4-5-20251001/);
+  assert.doesNotMatch(modelsHtml, /claude-from-tool-input|claude-prompt-side|Chat model/);
+
+  // With no model on any reply, the one name is the chat's, and the header says so.
+  const plain = normalizeClaudeConversation({ name: 'Plain', model: 'claude-opus-5-5', chat_messages: [
+    { uuid: 'p', sender: 'human', content: [{ type: 'text', text: 'hi' }] },
+    { uuid: 'r', parent_message_uuid: 'p', sender: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+  ] }, 'plain-id');
+  const plainHtml = renderConversationHtml({ ...plain, stats: deriveExportStats(plain.messages, plain.stats, { model: plain.model }) });
+  assert.match(plainHtml, /Chat model: claude-opus-5-5 \(Claude’s data names no model for individual replies\)/);
+  assert.match(plainHtml, /Model: unknown \/ not found/);
+  // ChatGPT exports keep their header unchanged.
+  assert.doesNotMatch(renderConversationHtml({ ...simple, stats: deriveExportStats(simple.messages, simple.stats, { model: simple.model }) }), /Chat model/);
+}
+
 assert.match(claudeSource, /lastActiveOrg/);
 assert.match(claudeSource, /render_all_tools=true/);
 assert.match(claudeSource, /current_leaf_message_uuid/);
@@ -888,7 +1044,7 @@ assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.16\.2/);
+assert.match(buildSource, /@version      0\.16\.3/);
 // The script runs on the whole host so a chat started on the home page gets the button
 // without a reload; the route check decides where the button shows.
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/*\n'));

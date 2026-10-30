@@ -47,8 +47,8 @@ assert.match(simpleHtml, /class="copy-btn"/);
 assert.match(simpleHtml, /querySelector\("\.content"\)/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.16\.4"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.4/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.16\.5"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.5/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -84,6 +84,16 @@ assert.deepEqual(deriveExportStats(modelTagged.messages, modelTagged.stats, { mo
 const railHrefs = [...simpleHtml.matchAll(/<a href="#(m-\d{4})"><span>/g)].map((match) => match[1]);
 assert.deepEqual(railHrefs, ['m-0001']);
 for (const href of railHrefs) assert.match(simpleHtml, new RegExp(`id="${href}"`));
+// The rail has previous/next buttons around its ticks. Choosing a prompt that sits in a
+// version not on screen switches to that version first (it has no layout while hidden),
+// and near the end of the page the last prompt on screen is the one lit.
+assert.match(simpleHtml, /<button class="rail-step" type="button" data-rail-step="-1"[^>]*>▲<\/button><ol>/);
+assert.match(simpleHtml, /<\/ol><button class="rail-step" type="button" data-rail-step="1"[^>]*>▼<\/button><\/nav>/);
+assert.match(coreSource, /fork\.showOption = showLocal/);
+assert.match(coreSource, /function reveal\(el\)[^']*\.branch-option\[hidden\], \.branch-view\[hidden\]/);
+assert.match(coreSource, /function jump\(i\) \{ if \(i < 0\) return; reveal\(items\[i\]\.el\)/);
+assert.match(coreSource, /var atEnd = window\.innerHeight \+ window\.scrollY >= document\.documentElement\.scrollHeight - 4/);
+assert.match(coreSource, /items\[i\]\.li\.classList\.toggle\("alt", !shown\(i\)\)/);
 
 const privateHtml = renderConversationHtml(simple, {
   exportedAt: '2026-08-15T00:00:00.000Z',
@@ -215,7 +225,7 @@ assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.4/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.5/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -1229,7 +1239,7 @@ assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.16\.4/);
+assert.match(buildSource, /@version      0\.16\.5/);
 // The script runs on the whole host so a chat started on the home page gets the button
 // without a reload; the route check decides where the button shows.
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/*\n'));

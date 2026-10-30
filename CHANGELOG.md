@@ -2,6 +2,20 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.16.5] — 2026-10-30
+
+### Fixed
+
+**The side navigation in exports skipped some prompts.** Two causes. A prompt inside a version that was not on screen (an **All branches** export) had no place on the page, so its tick did nothing. It now switches to that version and scrolls there; such ticks are drawn fainter. And the last few prompts of a chat can never scroll to the top of the window, so clicking one lit an earlier tick instead. The tick you choose now stays lit while its prompt is on screen, and at the end of the page the last prompt on screen is the one lit.
+
+### Changed
+
+**Bigger navigation, with up and down buttons.** The ticks are longer and thicker, with a larger click area. ▲ above them and ▼ below them go to the previous and next prompt, like the `k` and `j` keys, and grey out at either end.
+
+### Notes
+
+**The Claude 404 is parked.** v0.16.4 did not fix it on the owner's account; see `.claude/context/LOG.md` (2026-10-30, v0.16.5).
+
 ## [0.16.4] — 2026-10-30
 
 ### Fixed

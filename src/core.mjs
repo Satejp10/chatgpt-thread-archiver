@@ -1,4 +1,4 @@
-const ARCHIVER_VERSION = '0.16.4';
+const ARCHIVER_VERSION = '0.16.5';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -832,15 +832,21 @@ header.export-head { margin-bottom: 24px; }
 #rail-toggle { display: none; }
 #rail-tip { position: fixed; z-index: 60; transform: translateY(-50%); max-width: 44vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: #1f2328; color: #fff; font-size: 12px; padding: 4px 9px; border-radius: 4px; pointer-events: none; opacity: 0; transition: opacity .12s ease; }
 #rail-tip.on { opacity: 1; }
-html.js #rail { position: fixed; top: 0; right: 0; bottom: 0; width: 40px; max-width: none; margin: 0; padding: 0; background: none; border: 0; border-radius: 0; z-index: 50; display: flex; flex-direction: column; justify-content: center; align-items: flex-end; pointer-events: none; }
-html.js #rail ol { pointer-events: auto; list-style: none; padding: 8px 0; margin: 0; max-height: 100vh; overflow-y: auto; overflow-x: visible; scrollbar-width: none; }
+html.js #rail { position: fixed; top: 0; right: 0; bottom: 0; width: 56px; max-width: none; margin: 0; padding: 0; background: none; border: 0; border-radius: 0; z-index: 50; display: flex; flex-direction: column; justify-content: center; align-items: flex-end; pointer-events: none; }
+html.js #rail ol { pointer-events: auto; list-style: none; padding: 4px 0; margin: 0; max-height: calc(100vh - 96px); overflow-y: auto; overflow-x: visible; scrollbar-width: none; }
 html.js #rail ol::-webkit-scrollbar { display: none; }
 html.js #rail h2 { display: none; }
 html.js #rail li { margin: 0; }
-html.js #rail a { display: block; position: relative; padding: 3px 14px 3px 8px; }
-html.js #rail a::before { content: ""; display: block; height: 2px; width: 10px; margin-left: auto; background: #b9bec4; border-radius: 1px; transition: width .12s ease, background .12s ease; }
-html.js #rail a:hover::before, html.js #rail a:focus-visible::before { width: 20px; background: #6e7781; }
-html.js #rail li.active a::before { width: 22px; background: var(--accent); }
+html.js #rail a { display: block; position: relative; padding: 4px 16px 4px 12px; }
+html.js #rail a::before { content: ""; display: block; height: 3px; width: 16px; margin-left: auto; background: #b9bec4; border-radius: 1px; transition: width .12s ease, background .12s ease; }
+html.js #rail a:hover::before, html.js #rail a:focus-visible::before { width: 26px; background: #6e7781; }
+html.js #rail li.active a::before { width: 30px; background: var(--accent); }
+html.js #rail li.alt a::before { opacity: .4; }
+.rail-step { display: none; }
+html.js .rail-step { display: block; pointer-events: auto; margin: 6px 12px 6px 0; width: 32px; height: 28px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; }
+html.js .rail-step:hover, html.js .rail-step:focus-visible { color: var(--text); border-color: var(--muted); }
+html.js .rail-step:disabled { opacity: .35; cursor: default; }
+html.js #rail.hidden .rail-step { display: none; }
 html.js #rail a span { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 html.js #rail.hidden ol { display: none; }
 html.js #rail-toggle { display: block; position: fixed; top: 12px; right: 10px; padding: 3px 8px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); border-radius: 4px; cursor: pointer; z-index: 51; }
@@ -868,13 +874,15 @@ const EXPORT_JS = [
   '    var button = event.target.closest ? event.target.closest(".copy-btn") : null;',
   '    if (button) { var body = button.parentNode.querySelector(".content"); if (body) copy(body.innerText, button); return; }',
   '  });',
+  '  var onBranchChange = function () {};',
   '  var branchNav = document.getElementById("branch-nav"), branchViews = document.querySelectorAll(".branch-view"), branchPosition = document.getElementById("branch-position"), branchPrev = document.getElementById("branch-prev"), branchNext = document.getElementById("branch-next"), branchCurrent = 0;',
-  '  function showBranch(index) { if (!branchViews.length) return; branchCurrent = Math.max(0, Math.min(index, branchViews.length - 1)); for (var b = 0; b < branchViews.length; b++) branchViews[b].hidden = b !== branchCurrent; if (branchPosition) branchPosition.textContent = "Branch " + (branchCurrent + 1) + "/" + branchViews.length; if (branchPrev) branchPrev.disabled = branchCurrent === 0; if (branchNext) branchNext.disabled = branchCurrent === branchViews.length - 1; }',
+  '  function showBranch(index) { if (!branchViews.length) return; branchCurrent = Math.max(0, Math.min(index, branchViews.length - 1)); for (var b = 0; b < branchViews.length; b++) branchViews[b].hidden = b !== branchCurrent; if (branchPosition) branchPosition.textContent = "Branch " + (branchCurrent + 1) + "/" + branchViews.length; if (branchPrev) branchPrev.disabled = branchCurrent === 0; if (branchNext) branchNext.disabled = branchCurrent === branchViews.length - 1; onBranchChange(); }',
   '  if (branchNav && branchViews.length > 1) { branchPrev.addEventListener("click", function () { showBranch(branchCurrent - 1); }); branchNext.addEventListener("click", function () { showBranch(branchCurrent + 1); }); showBranch(0); }',
   '  var localForks = document.querySelectorAll(".branch-fork");',
   '  for (var f = 0; f < localForks.length; f++) (function (fork) {',
   '    var options = fork.querySelectorAll(":scope > .branch-option"), choice = fork.querySelector(":scope > .branch-choice"), position = choice && choice.querySelector("[data-branch-position]"), prev = choice && choice.querySelector("[data-branch-prev]"), next = choice && choice.querySelector("[data-branch-next]"), current = choice ? Number(choice.getAttribute("data-active-index")) || 0 : 0;',
-  '    function showLocal(index) { if (!options.length) return; current = Math.max(0, Math.min(index, options.length - 1)); for (var o = 0; o < options.length; o++) options[o].hidden = o !== current; if (position) position.textContent = (current + 1) + "/" + options.length; if (prev) prev.disabled = current === 0; if (next) next.disabled = current === options.length - 1; }',
+  '    function showLocal(index) { if (!options.length) return; current = Math.max(0, Math.min(index, options.length - 1)); for (var o = 0; o < options.length; o++) options[o].hidden = o !== current; if (position) position.textContent = (current + 1) + "/" + options.length; if (prev) prev.disabled = current === 0; if (next) next.disabled = current === options.length - 1; onBranchChange(); }',
+  '    fork.showOption = showLocal;',
   '    if (options.length > 1) { if (prev) prev.addEventListener("click", function () { showLocal(current - 1); }); if (next) next.addEventListener("click", function () { showLocal(current + 1); }); showLocal(current); }',
   '  })(localForks[f]);',
   '  var rail = document.getElementById("rail"), toggle = document.getElementById("rail-toggle");',
@@ -888,14 +896,29 @@ const EXPORT_JS = [
   '  if (!items.length) return;',
   '  function showTip(a) { var r = a.getBoundingClientRect(); tip.textContent = a.textContent; tip.style.top = (r.top + r.height / 2) + "px"; tip.style.right = (window.innerWidth - r.left + 8) + "px"; tip.className = "on"; }',
   '  function hideTip() { tip.className = ""; }',
-  '  var list = rail.querySelector("ol"), current = -1, visible = Object.create(null);',
+  '  var list = rail.querySelector("ol"), steps = rail.querySelectorAll(".rail-step"), current = -1, pinned = -1, pinUntil = 0, visible = Object.create(null), queued = false;',
   '  list.addEventListener("mouseover", function (e) { var a = e.target.closest ? e.target.closest("a") : null; if (a && list.contains(a)) showTip(a); });',
   '  list.addEventListener("mouseleave", hideTip); list.addEventListener("focusin", function (e) { if (e.target.tagName === "A") showTip(e.target); }); list.addEventListener("focusout", hideTip);',
-  '  function paint(i) { if (i < 0 || i === current) return; if (current >= 0) items[current].li.className = ""; items[i].li.className = "active"; current = i; }',
-  '  function recompute() { for (var i = 0; i < items.length; i++) if (visible[items[i].el.id]) { paint(i); return; } }',
-  '  if (window.IntersectionObserver) { var io = new IntersectionObserver(function (entries) { for (var k = 0; k < entries.length; k++) { var e = entries[k]; if (e.isIntersecting) visible[e.target.id] = 1; else delete visible[e.target.id]; } recompute(); }, { rootMargin: "-8% 0px -55% 0px", threshold: 0 }); for (var j = 0; j < items.length; j++) io.observe(items[j].el); }',
-  '  paint(0);',
-  '  function go(delta) { var next = current < 0 ? 0 : current + delta; if (next < 0) next = 0; if (next > items.length - 1) next = items.length - 1; items[next].el.scrollIntoView({ behavior: "smooth", block: "start" }); paint(next); }',
+  '  // A prompt inside a version that is not on screen has no layout; the rail dims it, and choosing it switches to that version first.',
+  '  function shown(i) { return !items[i].el.closest("[hidden]"); }',
+  '  function inView(i) { var r = items[i].el.getBoundingClientRect(); return r.height > 0 && r.bottom > 0 && r.top < window.innerHeight; }',
+  '  function mark() { for (var i = 0; i < items.length; i++) items[i].li.classList.toggle("alt", !shown(i)); }',
+  '  function step(delta) { var i = current < 0 ? (delta > 0 ? -1 : items.length) : current; do { i += delta; } while (i >= 0 && i < items.length && !shown(i)); return i >= 0 && i < items.length ? i : -1; }',
+  '  function paint(i) { if (i >= 0 && i !== current) { if (current >= 0) items[current].li.classList.remove("active"); items[i].li.classList.add("active"); current = i; var lr = items[i].li.getBoundingClientRect(), r = list.getBoundingClientRect(); if (lr.top < r.top) list.scrollTop += lr.top - r.top; else if (lr.bottom > r.bottom) list.scrollTop += lr.bottom - r.bottom; } if (steps.length === 2) { steps[0].disabled = step(-1) < 0; steps[1].disabled = step(1) < 0; } }',
+  '  // Near the end of the page the last prompts can never reach the top band, so the last one on screen wins there; a prompt just chosen stays lit while it is on screen.',
+  '  function recompute() { queued = false; if (pinned >= 0 && (Date.now() < pinUntil || inView(pinned))) { paint(pinned); return; } pinned = -1; var atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4, pick = -1; for (var i = 0; i < items.length; i++) if (shown(i) && (atEnd ? inView(i) : visible[items[i].el.id])) { pick = i; if (!atEnd) break; } paint(pick); }',
+  '  function schedule() { if (!queued) { queued = true; (window.requestAnimationFrame || setTimeout)(recompute); } }',
+  '  if (window.IntersectionObserver) { var io = new IntersectionObserver(function (entries) { for (var k = 0; k < entries.length; k++) { var e = entries[k]; if (e.isIntersecting) visible[e.target.id] = 1; else delete visible[e.target.id]; } schedule(); }, { rootMargin: "-8% 0px -55% 0px", threshold: 0 }); for (var j = 0; j < items.length; j++) io.observe(items[j].el); }',
+  '  window.addEventListener("scroll", schedule, { passive: true });',
+  '  function release() { if (pinned >= 0) { pinned = -1; pinUntil = 0; schedule(); } }',
+  '  window.addEventListener("wheel", release, { passive: true }); window.addEventListener("touchmove", release, { passive: true });',
+  '  function reveal(el) { for (var guard = 0; guard < 20; guard++) { var box = el.closest(".branch-option[hidden], .branch-view[hidden]"); if (!box) break; var index = Number(box.getAttribute("data-branch-index")) || 0; if (box.classList.contains("branch-view")) showBranch(index); else if (box.parentNode && box.parentNode.showOption) box.parentNode.showOption(index); else break; } }',
+  '  function jump(i) { if (i < 0) return; reveal(items[i].el); pinned = i; pinUntil = Date.now() + 1200; items[i].el.scrollIntoView({ behavior: "smooth", block: "start" }); paint(i); }',
+  '  function go(delta) { jump(step(delta)); }',
+  '  list.addEventListener("click", function (e) { var a = e.target.closest ? e.target.closest("a") : null; if (!a || !list.contains(a)) return; for (var i = 0; i < items.length; i++) if (items[i].a === a) { e.preventDefault(); jump(i); return; } });',
+  '  for (var s = 0; s < steps.length; s++) steps[s].addEventListener("click", function (e) { go(Number(e.currentTarget.getAttribute("data-rail-step")) || 1); });',
+  '  onBranchChange = function () { mark(); schedule(); };',
+  '  mark(); paint(step(1));',
   '  document.addEventListener("keydown", function (e) { var t = e.target; if (e.ctrlKey || e.metaKey || (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))) return; if (e.key === "j" || e.key === "n" || (e.altKey && e.key === "ArrowDown")) { e.preventDefault(); go(1); } else if (e.key === "k" || e.key === "p" || (e.altKey && e.key === "ArrowUp")) { e.preventDefault(); go(-1); } });',
   '})();',
 ].join('\n');
@@ -1031,7 +1054,7 @@ ${idMeta}
 <body>
 <button id="theme-toggle" type="button" aria-pressed="false">Dark mode</button>
 <button id="rail-toggle" type="button" aria-controls="rail" aria-expanded="true">Hide</button>
-<nav id="rail" aria-label="Prompts"><h2>Prompts</h2><ol>${railItems.join('')}</ol></nav>
+<nav id="rail" aria-label="Prompts"><h2>Prompts</h2><button class="rail-step" type="button" data-rail-step="-1" aria-label="Previous prompt" title="Previous prompt (k)">▲</button><ol>${railItems.join('')}</ol><button class="rail-step" type="button" data-rail-step="1" aria-label="Next prompt" title="Next prompt (j)">▼</button></nav>
 <div class="wrap">
 <header class="export-head">
   <h1>${title}</h1>

@@ -336,3 +336,30 @@ before the account moved to the new layout. The Claude app changelog
 **Open:** Live acceptance of v0.16.4: whether `ReadConversation` answers for the owner's
 failing chats, and with the field names the stand-in assumes. If it refuses, the report
 now names the call and its error code.
+
+## 2026-10-30 — v0.16.5: rail navigation; Claude 404 parked
+
+**Did:** Owner's live test of v0.16.4: a few Claude chats still fail. Report: chat API 404
+in both organizations and on `consistency=strong`; `ReadConversation (HTTP 404,
+not_found) | ReadConversation (HTTP 403, permission_denied)`; the page's only request
+naming the chat was `…/composer_notices (HTTP 200)`; other page requests included
+`/v1/code/sessions/<cse_id> (HTTP 200)`, `/v1/toolbox/shttp/mcp/<id>` (200, 202, 405) and,
+in a second capture, `/claudeai-rpc/anthropic.bard.api.v1alpha.ConversationService/ReportViewing
+(HTTP 200)`. The owner parked the issue. Fixed the export's rail: links into a hidden
+version did nothing, and the last prompts lit an earlier tick. Added ▲/▼ buttons and a
+bigger rail.
+
+**Decided:** Claude 404 parked at the owner's request. Per-reply models: Claude stores none
+apart from `turnModelFallback`, so no further work.
+
+**Learned:** On these chats neither the chat API nor `ReadConversation` knows the chat ID,
+while the page loads it. Leads, unverified: the page may load such a chat through a
+`/v1/code/sessions/<cse_id>` session (the Cowork-style sandbox), so the chat UUID in the
+address may not be the ID either service is keyed on; or `StreamTimeline` serves it where
+`ReadConversation` does not. The owner reports that version arrows still show on free-tier
+accounts, consistent with Claude-QoL's note that arrows hide only on accounts moved to the
+new layout.
+
+**Open:** If resumed: capture which `/claudeai-rpc/` method and which request body Claude's
+page sends when it opens a failing chat (DevTools, Network, names only), and whether
+`/v1/code/sessions/<cse_id>` returns the messages. Live acceptance of the v0.16.5 rail.

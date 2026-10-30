@@ -100,6 +100,8 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Claude new-layout chat (v0.16.4) | Reload the Claude chat that failed with a 404, wait for it to finish loading, then export | The chat exports. If it still fails, the error has a line starting `Claude’s new chat service:` with a status for each try, and the page's `/claudeai-rpc/…` requests show their service and method names; no full IDs appear |
 | Versions without arrows (v0.16.4) | On a Claude chat that shows no ‹ 1/2 › arrows, retry a reply once, choose **All branches** and export | The export shows both versions with ‹ 1/2 › |
 | Model fallback label (v0.16.4) | Only if Claude notes that it answered with a different model than the one picked: export that chat | That reply shows the model that answered, and the header lists it under `Models used` |
+| Rail reaches every prompt (v0.16.5) | Open a long export, made with **All branches** if the chat has versions; click the last few ticks, then a faint tick | Each click scrolls to its prompt and lights that tick; a faint tick first switches to its version |
+| Rail buttons (v0.16.5) | Click ▼ and ▲ beside the ticks | They move one prompt down or up; ▲ is grey at the first prompt and ▼ at the last |
 
 ## Failure report template
 

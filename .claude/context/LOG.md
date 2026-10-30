@@ -304,3 +304,35 @@ agarwalvishal/claude-chat-exporter) read only that field.
 **Open:** Live acceptance of v0.16.3. If the 404 persists, the new report should show
 where the page gets the chat. Run the probe on the retried chat to learn whether Claude
 stores a model per reply.
+
+## 2026-10-30 — v0.16.4: Claude's new chat service, fallback models, branch arrows
+
+**Did:** Owner's live test of v0.16.3 (2026-10-29). The 404 persisted on some chats. The
+report showed the chat API refusing the chat in both organizations and on the
+`consistency=strong` retry, the page asking the chat API only for composer notices, and,
+among the page's other requests, `/claudeai-rpc/<id>/<id> (HTTP 200)` and
+`/v1/code/sessions/<cse_id> (HTTP 200)`. A "hi" chat retried with three models exported
+three versions and no reply model. The owner also saw that Claude's page no longer shows
+‹ 1/3 ›. The fix: after every chat API attempt fails, ask
+`ConversationService/ReadConversation` (Connect JSON, same-origin POST) in the same
+organizations, page with `ReadConversationHistory`, and convert the answer into the chat
+API's shape in `claudeTimelineConversation()`. Replies take `turnModelFallback.servedModel`.
+The header warns when history stops early. The report keeps RPC service and method names.
+
+**Decided:** The service is a fallback only, after the chat API, so chats that export today
+take the same single request. Converting into the chat API's shape keeps one normalizer and
+renderer. Rejected: calling `StreamTimeline` (a framed protobuf stream; the unary call
+returns the whole tree), copying code from Claude-QoL or claude-ext-common (GPL-3.0; only
+facts from their notes are used), and patching `fetch` to read the page's own stream.
+
+**Learned:** Per Claude-QoL's notes (third-party), chats in Claude's new layout load from a
+Connect RPC service under `/claudeai-rpc/`, which accepts JSON, checks the origin, and
+answers legacy accounts with `permission_denied`. Its messages carry no model, only the
+conversation's model and a `turnModelFallback` when Claude switched models itself. Claude
+shows version arrows only where `siblings_viewable` is true, which is for versions made
+before the account moved to the new layout. The Claude app changelog
+(claude.com/docs/cowork/changelog, August to October 2026) mentions neither.
+
+**Open:** Live acceptance of v0.16.4: whether `ReadConversation` answers for the owner's
+failing chats, and with the field names the stand-in assumes. If it refuses, the report
+now names the call and its error code.

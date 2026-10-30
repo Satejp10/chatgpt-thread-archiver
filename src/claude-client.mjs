@@ -150,14 +150,21 @@ export function claudeIdFormat(conversationId) {
 // A static API segment is lowercase words, optionally versioned (`chat_conversations_v2`).
 // Anything else long enough to be an identifier is replaced, keeping only a type prefix.
 function claudeSegmentShape(segment, conversationId) {
-  if (segment === conversationId) return '<this-chat>';
+  if (conversationId && segment === conversationId) return '<this-chat>';
   if (segment.length < 8 || /^[a-z]+(?:[_-][a-z]+)*(?:[_-]v\d{1,2})?$/.test(segment)) return segment;
   const prefix = segment.match(/^([a-z]{2,12})_/)?.[1];
   return prefix ? `<${prefix}_id>` : '<id>';
 }
 
+// An RPC path carries no identifier, only a dotted service name and a method name
+// (`/claudeai-rpc/anthropic.bard.api.v1alpha.ConversationService/StreamTimeline`). v0.16.3
+// reported both as `<id>`, which hid which call Claude's page made.
+const CLAUDE_RPC_NAME_RE = /^(?:[a-z][a-z0-9]*\.){2,8}[A-Z][A-Za-z0-9]{2,60}$|^(?:[A-Z][a-z]+){2,8}$/;
+
 export function redactClaudePath(pathname, conversationId = '') {
-  return String(pathname ?? '').split('/').map((segment) => claudeSegmentShape(segment, String(conversationId ?? ''))).join('/');
+  const segments = String(pathname ?? '').split('/');
+  const rpc = segments[1] === 'claudeai-rpc';
+  return segments.map((segment) => (rpc && CLAUDE_RPC_NAME_RE.test(segment) ? segment : claudeSegmentShape(segment, String(conversationId ?? '')))).join('/');
 }
 
 function claudeNow() {
@@ -196,7 +203,7 @@ function claudePageRequests(conversationId, entries = null, own = claudeOwnReque
       continue;
     }
     if (parsed.origin !== currentClaudeOrigin()) continue;
-    if (!/^\/(?:api|v1)\//.test(parsed.pathname) && !['fetch', 'xmlhttprequest'].includes(String(entry?.initiatorType ?? ''))) continue;
+    if (!/^\/(?:api|v1|claudeai-rpc)\//.test(parsed.pathname) && !['fetch', 'xmlhttprequest'].includes(String(entry?.initiatorType ?? ''))) continue;
     const status = Number(entry?.responseStatus);
     const organization = parsed.pathname.match(/^\/api\/organizations\/([^/]+)\//)?.[1] ?? '';
     requests.push({
@@ -268,11 +275,16 @@ async function fetchClaudeWithTimeout(fetchImpl, url, options, timeoutMs) {
   }
 }
 
-async function claudeGet(fetchImpl, path, timeoutMs) {
-  const url = new URL(path, currentClaudeOrigin()).toString();
+function rememberOwnClaudeRequest(url) {
   const own = { url, start: claudeNow(), end: Number.POSITIVE_INFINITY };
   claudeOwnRequests.push(own);
   claudeOwnRequests.splice(0, Math.max(0, claudeOwnRequests.length - 50));
+  return own;
+}
+
+async function claudeGet(fetchImpl, path, timeoutMs) {
+  const url = new URL(path, currentClaudeOrigin()).toString();
+  const own = rememberOwnClaudeRequest(url);
   try {
     return await fetchClaudeWithTimeout(fetchImpl, url, {
       method: 'GET',
@@ -302,18 +314,328 @@ async function listClaudeOrganizations(fetchImpl, timeoutMs) {
   }
 }
 
+// Claude's new chat layout (chat and Cowork merged) loads chats through a Connect RPC
+// service, and the chat API answers 404 for the ones that live only there. Nothing about
+// the service is published: the method, header and field names here come from a
+// third-party extraction of its schema (claude-ext-common's bard-schema.js, snapshot
+// 2026-10-07). It takes Connect's JSON codec, a POST of camelCase fields, and answers in
+// protojson: enum names, int64 values as strings, RFC 3339 timestamps, defaults left out.
+const CLAUDE_RPC_PATH = '/claudeai-rpc/anthropic.bard.api.v1alpha.ConversationService/';
+const MAX_CLAUDE_HISTORY_PAGES = 100;
+
+// The headers Claude's page sends with these calls. The service also checks Origin,
+// which a same-origin fetch from the page carries.
+async function claudeRpc(fetchImpl, method, organizationId, body, timeoutMs) {
+  const url = new URL(`${CLAUDE_RPC_PATH}${method}`, currentClaudeOrigin()).toString();
+  const own = rememberOwnClaudeRequest(url);
+  try {
+    return await fetchClaudeWithTimeout(fetchImpl, url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'Connect-Protocol-Version': '1',
+        'X-Organization-Uuid': organizationId,
+        'Anthropic-Client-Platform': 'web_claude_ai',
+      },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    }, timeoutMs);
+  } finally {
+    own.end = claudeNow();
+  }
+}
+
+async function claudeRpcBody(response) {
+  if (!String(response.headers?.get?.('content-type') ?? '').toLowerCase().includes('json')) return null;
+  try {
+    const body = await response.json();
+    return body && typeof body === 'object' && !Array.isArray(body) ? body : null;
+  } catch {
+    return null;
+  }
+}
+
+// A Connect error body is `{ code, message }`. Only the code is reported: the message is
+// free text from Claude.
+async function claudeRpcErrorCode(response) {
+  const code = (await claudeRpcBody(response))?.code;
+  return typeof code === 'string' && /^[a-z_]{1,40}$/.test(code) ? code : null;
+}
+
+// protojson writes lowerCamelCase names unless the server asks for the .proto names, and
+// enum names unless it asks for numbers. Each is read either way.
+function bardField(record, camel, snake) {
+  return record && typeof record === 'object' ? (record[camel] ?? record[snake]) : undefined;
+}
+
+function bardEnum(value, prefix, names) {
+  if (Number.isInteger(value)) return names[value] ?? '';
+  return typeof value === 'string' && value.startsWith(prefix) ? value.slice(prefix.length) : '';
+}
+
+function bardList(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function bardTimestamp(value) {
+  if (typeof value === 'string') return Number.isFinite(Date.parse(value)) ? value : null;
+  const seconds = Number(value?.seconds);
+  const ms = seconds * 1000 + (Number(value?.nanos) || 0) / 1e6;
+  return Number.isFinite(ms) && Math.abs(ms) <= 8.64e15 ? new Date(ms).toISOString() : null;
+}
+
+const BARD_ROLES = ['UNSPECIFIED', 'USER', 'ASSISTANT', 'SYSTEM'];
+const BARD_BLOCK_STATES = ['UNSPECIFIED', 'RUNNING', 'COMPLETE', 'ERROR', 'PENDING_APPROVAL', 'CANCELLED'];
+const BARD_TEXT_STYLES = ['UNSPECIFIED', 'PLAIN', 'MARKDOWN', 'CODE'];
+const BARD_FILE_KINDS = ['UNSPECIFIED', 'IMAGE', 'BLOB', 'DOCUMENT'];
+const BARD_INPUT_KINDS = ['UNSPECIFIED', 'TEXT', 'COMMAND', 'FILE_PATH', 'PATTERN', 'URL', 'QUERY', 'UNNAMED_WEB_PAGE', 'SKILL_NAME', 'JAVASCRIPT'];
+const CLAUDE_SAFE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/;
+
+function bardIndexOrder(left, right) {
+  return (Number(left?.index) || 0) - (Number(right?.index) || 0);
+}
+
+// A rich card (weather, a map, a recipe) is named by the one field its display content
+// sets; the card itself is not exported.
+function bardCardKind(block) {
+  const content = bardField(block, 'displayContent', 'display_content');
+  const key = content && typeof content === 'object' ? Object.keys(content).find((name) => /^[A-Za-z_]{1,40}$/.test(name)) : null;
+  return key ? key.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase() : null;
+}
+
+// `input_summary` can be cut short; the input table holds each value in full. Built with
+// Object.fromEntries so a key such as `__proto__` stays a plain field.
+function bardToolInput(block, inputSummary, inputKind) {
+  const table = bardField(bardField(block, 'inputDisplay', 'input_display'), 'table', 'table');
+  const entries = [];
+  for (const row of bardList(table?.rows)) {
+    const key = claudeString(bardField(row, 'inputKey', 'input_key')).trim() || claudeString(row?.label).trim();
+    if (key && typeof row?.value === 'string' && !entries.some(([other]) => other === key)) entries.push([key, row.value]);
+  }
+  if (entries.length > 0) return Object.fromEntries(entries);
+  return inputSummary.trim() ? { [inputKind && inputKind !== 'UNSPECIFIED' ? inputKind.toLowerCase() : 'input']: inputSummary } : null;
+}
+
+// A web search's results come as a list of titles and addresses, which is also all the
+// chat API keeps of them.
+function bardResultText(block, text) {
+  if (text.trim()) return text;
+  const list = bardField(bardField(block, 'displayContent', 'display_content'), 'richItems', 'rich_items');
+  return bardList(list?.items)
+    .map((item) => [claudeString(item?.title).trim(), claudeString(item?.url).trim()].filter(Boolean).join('\n'))
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+// A content block has no type field: which fields are set says what it is. Thinking has
+// summary lines or thinking timestamps, a tool step has a tool name, an input summary or a
+// row kind, and the rest is text. Each becomes the chat API's block of the same kind, so
+// one normalizer reads both.
+function bardContentBlocks(block) {
+  const text = claudeString(block?.text);
+  const summaries = bardList(block?.summaries).map((entry) => ({ summary: claudeString(entry?.summary) }));
+  const thinking = bardField(block, 'thinkingDisplay', 'thinking_display');
+  if (summaries.length > 0 || (thinking && typeof thinking === 'object')) {
+    return [{
+      type: 'thinking',
+      thinking: text,
+      // Only an absent reasoning text with summary lines in its place reads as withheld.
+      thinking_hidden: !text.trim() && summaries.some((entry) => entry.summary.trim()),
+      summaries,
+      truncated: Boolean(bardField(block, 'isTruncated', 'is_truncated')),
+      start_timestamp: bardTimestamp(bardField(thinking, 'startedAt', 'started_at')),
+      stop_timestamp: bardTimestamp(bardField(thinking, 'completedAt', 'completed_at')),
+    }];
+  }
+  const toolName = claudeString(bardField(block, 'toolDisplayName', 'tool_display_name')).trim();
+  const inputSummary = claudeString(bardField(block, 'inputSummary', 'input_summary'));
+  const rowKind = bardField(block, 'rowKind', 'row_kind');
+  const isToolRow = Number.isInteger(rowKind) ? rowKind > 0 : typeof rowKind === 'string' && rowKind.startsWith('TOOL_ROW_KIND_') && rowKind !== 'TOOL_ROW_KIND_UNSPECIFIED';
+  if (toolName || inputSummary.trim() || isToolRow) {
+    const title = claudeString(block?.title).trim();
+    const name = toolName || title || 'tool';
+    const inputKind = bardEnum(bardField(block, 'inputSummaryKind', 'input_summary_kind'), 'INPUT_SUMMARY_KIND_', BARD_INPUT_KINDS);
+    const failed = bardEnum(block?.state, 'CONTENT_BLOCK_STATE_', BARD_BLOCK_STATES) === 'ERROR';
+    const result = bardResultText(block, text);
+    const blocks = [{ type: 'tool_use', name, message: title && title !== name ? title : '', input: bardToolInput(block, inputSummary, inputKind) }];
+    if (result.trim() || failed) blocks.push({ type: 'tool_result', name, is_error: failed, content: [{ type: 'text', text: result }] });
+    return blocks;
+  }
+  if (text.trim()) {
+    const format = bardField(block, 'textFormat', 'text_format');
+    const language = claudeString(format?.language).trim();
+    // A code block is fenced so the renderer shows it as code; one that holds a fence of
+    // its own stays plain text rather than breaking out of it.
+    if (bardEnum(format?.style, 'STYLE_', BARD_TEXT_STYLES) === 'CODE' && !/^\s*```/m.test(text)) {
+      return [{ type: 'text', text: `\`\`\`${/^[A-Za-z0-9_+.#-]{1,30}$/.test(language) ? language : ''}\n${text}\n\`\`\`` }];
+    }
+    return [{ type: 'text', text }];
+  }
+  const card = bardCardKind(block);
+  return card ? [{ type: `${card} card` }] : [];
+}
+
+// Only an uploaded image on an approved same-origin route is ever fetched (see assets.mjs);
+// any other attachment stays an omission marker, as on the chat API.
+function bardAttachment(attachment) {
+  const kind = bardEnum(bardField(attachment, 'fileKind', 'file_kind'), 'FILE_KIND_', BARD_FILE_KINDS);
+  const mediaType = claudeString(bardField(attachment, 'mediaType', 'media_type'));
+  const image = (kind === 'IMAGE' || /^image\//i.test(mediaType)) && !attachment?.unavailable;
+  const size = (value) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : null);
+  const addresses = [claudeString(attachment?.url).trim(), claudeString(bardField(attachment, 'thumbnailUrl', 'thumbnail_url')).trim()].filter(Boolean);
+  return {
+    file_kind: image ? 'image' : 'file',
+    preview_url: addresses.find((address) => /\/files\/[^/?#]+\/(?:preview|thumbnail)$/.test(address)) ?? addresses[0] ?? '',
+    size_bytes: size(bardField(attachment, 'fileSize', 'file_size')),
+    preview_asset: { image_width: size(bardField(attachment, 'previewWidth', 'preview_width')), image_height: size(bardField(attachment, 'previewHeight', 'preview_height')) },
+  };
+}
+
+function bardGroupBy(records, key) {
+  const groups = new Map();
+  for (const record of records) {
+    const id = key(record);
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(record);
+  }
+  return groups;
+}
+
+// The service's messages, display groups and content blocks, rebuilt as the chat API's
+// conversation: each message's groups in order, each group's blocks in order.
+function claudeTimelineConversation(updates, historyComplete) {
+  const records = { messages: new Map(), groups: new Map(), blocks: new Map() };
+  const deleted = new Set();
+  let conversation = null;
+  const collect = (map, list) => {
+    for (const record of bardList(list)) {
+      const id = claudeString(record?.id);
+      // The first answer is the newest state; history pages only add what it lacks.
+      if (id && !map.has(id)) map.set(id, record);
+    }
+  };
+  for (const update of updates) {
+    if (!conversation && update?.conversation && typeof update.conversation === 'object') conversation = update.conversation;
+    collect(records.messages, update?.messages);
+    collect(records.groups, bardField(update, 'displayGroups', 'display_groups'));
+    collect(records.blocks, bardField(update, 'contentBlocks', 'content_blocks'));
+    for (const [camel, snake] of [['deletedMessageIds', 'deleted_message_ids'], ['deletedDisplayGroupIds', 'deleted_display_group_ids'], ['deletedContentBlockIds', 'deleted_content_block_ids']]) {
+      for (const id of bardList(bardField(update, camel, snake))) deleted.add(String(id));
+    }
+  }
+  const live = (map) => [...map.values()].filter((record) => !deleted.has(claudeString(record?.id)));
+  const blocksByGroup = bardGroupBy(live(records.blocks), (block) => claudeString(bardField(block, 'displayGroupId', 'display_group_id')));
+  const groupsByMessage = bardGroupBy(live(records.groups), (group) => claudeString(bardField(group, 'messageId', 'message_id')));
+  const chatMessages = live(records.messages).map((message) => {
+    const id = claudeString(message?.id);
+    const role = bardEnum(message?.role, 'ROLE_', BARD_ROLES);
+    const fallback = bardField(message, 'turnModelFallback', 'turn_model_fallback');
+    const served = claudeString(bardField(fallback, 'servedModel', 'served_model')).trim();
+    return {
+      uuid: id,
+      sender: role === 'USER' ? 'human' : role === 'ASSISTANT' ? 'assistant' : (role.toLowerCase() || 'unknown'),
+      index: Number(message?.index) || 0,
+      created_at: bardTimestamp(bardField(message, 'createdAt', 'created_at')),
+      parent_message_uuid: claudeString(bardField(message, 'parentMessageId', 'parent_message_id')) || null,
+      content: [...(groupsByMessage.get(id) ?? [])].sort(bardIndexOrder)
+        .flatMap((group) => [...(blocksByGroup.get(claudeString(group?.id)) ?? [])].sort(bardIndexOrder).flatMap(bardContentBlocks)),
+      files: bardList(message?.attachments).map(bardAttachment),
+      // The service names a model on a reply only when Claude answered with another model
+      // than the one asked for; `served_model` is the one that wrote it.
+      model: CLAUDE_SAFE_MODEL_RE.test(served) ? served : undefined,
+    };
+  });
+  // With no parent links at all, the messages are one line in index order.
+  if (chatMessages.length > 1 && chatMessages.every((message) => !message.parent_message_uuid)) {
+    chatMessages.sort(bardIndexOrder).forEach((message, index) => { message.parent_message_uuid = index > 0 ? chatMessages[index - 1].uuid : null; });
+  }
+  const model = conversation?.model;
+  const identifier = claudeString(typeof model === 'string' ? model : model?.identifier).trim();
+  return {
+    name: claudeString(conversation?.title).trim(),
+    model: CLAUDE_SAFE_MODEL_RE.test(identifier) ? identifier : null,
+    current_leaf_message_uuid: claudeString(bardField(conversation, 'currentLeafMessageId', 'current_leaf_message_id')) || null,
+    chat_messages: chatMessages,
+    source_shape: 'claude-rpc-timeline',
+    history_incomplete: !historyComplete,
+  };
+}
+
+function claudeCursor(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 4096 ? value : null;
+}
+
+// The first answer may hold only the latest part of a long chat, with a cursor for the
+// part before it. Pages are read until there is no cursor, at most 100 of them; stopping
+// early is reported in the export rather than passed off as the whole chat.
+async function readClaudeHistory(fetchImpl, conversationId, organization, first, timeoutMs) {
+  const updates = [];
+  const seen = new Set();
+  let cursor = claudeCursor(bardField(first, 'olderHistoryCursor', 'older_history_cursor'));
+  while (cursor) {
+    if (seen.has(cursor) || seen.size >= MAX_CLAUDE_HISTORY_PAGES) return { updates, complete: false };
+    seen.add(cursor);
+    let response;
+    try {
+      response = await claudeRpc(fetchImpl, 'ReadConversationHistory', organization, { conversationId, cursor }, timeoutMs);
+    } catch {
+      return { updates, complete: false };
+    }
+    const body = response.ok ? await claudeRpcBody(response) : null;
+    if (!body || (body.outcome !== undefined && body.outcome !== 'OUTCOME_PAGE' && body.outcome !== 1)) return { updates, complete: false };
+    if (body.update && typeof body.update === 'object') updates.push(body.update);
+    cursor = claudeCursor(bardField(body, 'olderCursor', 'older_cursor') ?? bardField(body.update, 'olderHistoryCursor', 'older_history_cursor'));
+  }
+  return { updates, complete: true };
+}
+
+// Asked only after the chat API refused the chat in every organization. Each organization
+// it was asked in is asked again here, in the same order, until one serves the chat.
+async function readClaudeTimeline(fetchImpl, conversationId, organizations, timeoutMs) {
+  const attempts = [];
+  for (const organization of organizations) {
+    let response;
+    try {
+      response = await claudeRpc(fetchImpl, 'ReadConversation', organization, { conversationId }, timeoutMs);
+    } catch {
+      attempts.push('ReadConversation (no response)');
+      break;
+    }
+    if (!response.ok) {
+      const code = await claudeRpcErrorCode(response);
+      attempts.push(`ReadConversation (HTTP ${response.status}${code ? `, ${code}` : ''})`);
+      if (response.status === 403 || response.status === 404) continue;
+      break;
+    }
+    const body = await claudeRpcBody(response);
+    const update = body?.update && typeof body.update === 'object' ? body.update : null;
+    if (!update) {
+      const outcome = typeof body?.outcome === 'string' && /^[A-Z_]{1,40}$/.test(body.outcome) ? `, ${body.outcome}` : '';
+      attempts.push(`ReadConversation (HTTP ${response.status}, ${body ? `no conversation${outcome}` : 'unreadable response'})`);
+      continue;
+    }
+    const history = await readClaudeHistory(fetchImpl, conversationId, organization, update, timeoutMs);
+    return { raw: claudeTimelineConversation([update, ...history.updates], history.complete), attempts };
+  }
+  return { raw: null, attempts };
+}
+
 // Cowork sessions have been reported (not documented) to use `cse_` ids and to be absent
 // from the chat API. Since the September 2026 merge they open from the same conversation
 // list as chats, so the button can appear on one. Where the browser recorded what Claude's
 // own page got when it asked the chat API for this chat, the message follows that instead.
-function claudeNotFoundError(conversationId, { tried, retries, entries = null }) {
+function claudeNotFoundError(conversationId, { tried, retries, timeline = [], entries = null }) {
   const id = String(conversationId ?? '');
   const pageRequests = claudePageRequests(id, entries);
   const pageLoad = pageRequests.find((request) => request.loadsChat && request.status);
   const pageOrganizations = [...new Set(pageRequests.filter((request) => request.namesChat && request.organization).map((request) => request.organization))];
+  const pageUsesRpc = pageRequests.some((request) => request.parsed.pathname.startsWith('/claudeai-rpc/'));
   let message;
   if (pageLoad && pageLoad.status >= 200 && pageLoad.status < 300) message = 'Claude’s page loaded this chat from the same chat API, but Claude refused every request the exporter made for it. Claude’s page sends something the exporter does not.';
   else if (pageLoad) message = `Claude’s chat API also answered ${pageLoad.status} to Claude’s own page for this chat, so the page loads it from somewhere else. Its other requests are listed below.`;
+  else if (pageUsesRpc && timeline.length) message = 'Claude’s page loads this chat through Claude’s new chat service, not the chat API. The exporter asked that service too, and it did not return the chat.';
   else if (CLAUDE_UUID_RE.test(id)) message = 'Claude’s chat API has no conversation with this ID in any organization on this account. Since chat and Cowork merged, a conversation that ran as a Cowork task may be stored outside the chat API this exporter reads.';
   else if (id.startsWith('cse_')) message = 'This ID has the shape of a Cowork task (“cse_…”), and Claude’s chat API has no conversation with it. Claude stores Cowork tasks outside the chat API this exporter reads, so it cannot export them yet.';
   else message = 'This is not a regular Claude chat ID, and Claude’s chat API has no conversation with it. Since chat and Cowork merged, some conversations are stored outside the chat API this exporter reads.';
@@ -325,6 +647,7 @@ function claudeNotFoundError(conversationId, { tried, retries, entries = null })
     organizationsTried: tried.size,
     pageOrganizationChecked: pageOrganizations.length ? pageOrganizations.every((organization) => tried.has(organization)) : null,
     retries,
+    timeline,
     pageRequests: requests.naming,
     recentRequests: requests.other.slice(0, 6),
   });
@@ -390,7 +713,11 @@ export async function fetchClaudeConversation(conversationId, { fetchImpl = glob
   if (!response) throw new ClaudeClientError('missing-organization', 'Claude session information was not found. Sign in, reload the conversation, and retry.');
 
   if (response.status === 401 || response.status === 403) throw new ClaudeClientError('auth', `Claude rejected the conversation request (${response.status}). Sign in again, then retry.`);
-  if (response.status === 404) throw claudeNotFoundError(conversationId, { tried, retries, entries: resourceEntries });
+  if (response.status === 404) {
+    const timeline = await readClaudeTimeline(fetchImpl, conversationId, [...tried].slice(0, MAX_FALLBACK_ORGANIZATIONS + 1), timeoutMs);
+    if (timeline.raw) return timeline.raw;
+    throw claudeNotFoundError(conversationId, { tried, retries, timeline: timeline.attempts, entries: resourceEntries });
+  }
   if (response.status === 429) throw new ClaudeClientError('rate-limit', 'Claude is rate-limiting the request. Wait briefly and retry.');
   if (!response.ok) throw new ClaudeClientError('http', `Claude returned HTTP ${response.status}.`);
 
@@ -705,7 +1032,7 @@ export function normalizeClaudeConversation(raw, conversationId = null) {
     conversationId: conversationId ?? raw.conversation_id ?? raw.id ?? null,
     model: typeof raw.model === 'string' && raw.model.trim() ? raw.model.trim() : null,
     provider: 'Claude',
-    sourceShape: 'claude-message-tree',
+    sourceShape: raw.source_shape === 'claude-rpc-timeline' ? 'claude-rpc-timeline' : 'claude-message-tree',
     activeBranch: ordered.activeBranch,
     activeBranchIndex: 0,
     branches: branches.length > 1 ? branches : [],
@@ -722,6 +1049,8 @@ export function normalizeClaudeConversation(raw, conversationId = null) {
       alternateBranchMessageCount: ordered.activeBranch ? Math.max(0, allCount - ordered.messages.length) : 0,
       duplicateMessageCount: branches[0]?.stats?.duplicateMessageCount ?? 0,
       hiddenMessageCount: uniqueMessages.filter((message) => message.hidden).length,
+      // Set when Claude's new chat service stopped giving older pages of the chat.
+      historyIncomplete: raw.history_incomplete === true,
       branchCount: branches.length,
       imageCount: 0,
       imageEmbeddedCount: 0,
@@ -744,6 +1073,7 @@ export function describeClaudeError(error) {
     lines.push(`Organizations checked: ${details.organizationsTried}${pageOrganization}`);
   }
   if (details.retries?.length) lines.push(`Retries: ${details.retries.join(' | ')}`);
+  if (details.timeline?.length) lines.push(`Claude’s new chat service: ${details.timeline.join(' | ')}`);
   if (details.pageRequests?.length) lines.push(`Claude’s page, requests naming this chat: ${details.pageRequests.join(' | ')}`);
   else if (details.pageRequests) lines.push('Claude’s page made no recorded request naming this chat.');
   if (details.recentRequests?.length) lines.push(`Claude’s page, other recent API requests: ${details.recentRequests.join(' | ')}`);

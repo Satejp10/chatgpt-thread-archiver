@@ -47,8 +47,8 @@ assert.match(simpleHtml, /class="copy-btn"/);
 assert.match(simpleHtml, /querySelector\("\.content"\)/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.16\.3"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.3/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.16\.4"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.4/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -215,7 +215,7 @@ assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.3/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.4/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -860,11 +860,12 @@ await assert.rejects(() => fetchClaudeConversation('aaaaaaaa-aaaa-4aaa-8aaa-aaaa
     { name: `https://claude.ai/api/organizations/${pageOrg}/chat_conversations_v2?limit=30`, startTime: 7, responseStatus: 200 },
   ], fetchImpl: async (url) => { calls += 1; return isList(url) ? claudeResponse(200, [{ uuid: 'org-one' }]) : claudeResponse(404, {}); } }).catch((error) => error);
   assert.equal(failed.code, 'not-found');
-  assert.equal(calls, 2 + 3, 'cookie organization, account list, then at most three retries');
+  assert.equal(calls, 2 + 3 + 3, 'cookie organization, account list, at most three retries, then the new chat service in each of the three organizations');
   const report = describeClaudeError(failed);
   assert.match(report, /^Claude’s page loaded this chat from the same chat API, but Claude refused every request the exporter made for it/);
   assert.match(report, /Organizations checked: 3, including the one Claude’s page used/);
   assert.match(report, /Retries: organization Claude’s page used \(HTTP 404\) \| exact request Claude’s page made \(HTTP 404\) \| organization Claude’s page used \(HTTP 404\)/);
+  assert.match(report, /Claude’s new chat service: ReadConversation \(HTTP 404\) \| ReadConversation \(HTTP 404\) \| ReadConversation \(HTTP 404\)/);
   assert.match(report, /Claude’s page, requests naming this chat: \/api\/organizations\/<id>\/chat_conversations\/<this-chat>\?tree,rendering_mode,consistency \(HTTP 200\) \| \/api\/organizations\/<id>\/chat_conversations\/<this-chat>\/composer_notices \(HTTP 200\)/);
   assert.match(report, /Claude’s page, other recent API requests: \/api\/organizations\/<id>\/chat_conversations_v2\?limit \(HTTP 200\)/);
   assert.doesNotMatch(report, new RegExp(`${pageOrg}|${id}|7c9e6679|org-one`));
@@ -878,6 +879,190 @@ await assert.rejects(() => fetchClaudeConversation('aaaaaaaa-aaaa-4aaa-8aaa-aaaa
   const unrecorded = await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [], fetchImpl: async (url) => (isList(url) ? claudeResponse(200, []) : claudeResponse(404, {})) }).catch((error) => error);
   assert.match(describeClaudeError(unrecorded), /Retries: consistency=strong \(HTTP 404\)/);
   assert.match(describeClaudeError(unrecorded), /Claude’s page made no recorded request naming this chat\./);
+}
+
+// Claude's new chat layout loads chats through a Connect RPC service. A chat the chat API
+// answers 404 for is read from the service's ReadConversation instead, and rebuilt as the
+// chat API's conversation so one normalizer serves both.
+{
+  const id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const rpcUrl = (method) => `https://claude.ai/claudeai-rpc/anthropic.bard.api.v1alpha.ConversationService/${method}`;
+  const isList = (url) => new URL(url).pathname === '/api/organizations';
+  const isRpc = (url) => new URL(url).pathname.startsWith('/claudeai-rpc/');
+  const timeline = {
+    outcome: 'OUTCOME_SERVED',
+    update: {
+      replaceAllState: true,
+      conversation: { id, title: 'Merged chat', model: { identifier: 'claude-opus-5-5' }, currentLeafMessageId: 'a2' },
+      messages: [
+        { id: 'u1', conversationId: id, role: 'ROLE_USER', createdAt: '2026-10-20T10:00:00Z', attachments: [
+          { id: 'f1', fileName: 'chart.png', fileKind: 'FILE_KIND_IMAGE', url: '/api/org-one/files/f1/preview', fileSize: '2048', previewWidth: 400, previewHeight: 300 },
+          { id: 'f2', fileName: 'notes.txt', fileKind: 'FILE_KIND_DOCUMENT', url: '/api/org-one/files/f2/contents' },
+        ] },
+        { id: 'a1', role: 'ROLE_ASSISTANT', index: 1, parentMessageId: 'u1', turnModelFallback: { displayText: 'Answered with another model', requestedModel: 'claude-opus-5-5', servedModel: 'claude-sonnet-4-5' } },
+        { id: 'a2', role: 'ROLE_ASSISTANT', index: 2, parentMessageId: 'u1', siblingsViewable: false },
+      ],
+      displayGroups: [
+        { id: 'g-a1-text', messageId: 'a1', index: 1, style: 'GROUP_STYLE_INLINE' },
+        { id: 'g-u1', messageId: 'u1', style: 'GROUP_STYLE_INLINE' },
+        { id: 'g-a1-steps', messageId: 'a1', style: 'GROUP_STYLE_TIMELINE' },
+        { id: 'g-a2', messageId: 'a2' },
+      ],
+      contentBlocks: [
+        { id: 'b-u1', displayGroupId: 'g-u1', text: 'Compare the models', textFormat: { style: 'STYLE_MARKDOWN' } },
+        { id: 'b-a1-code', displayGroupId: 'g-a1-text', index: 1, text: 'print("hi")', textFormat: { style: 'STYLE_CODE', language: 'python' } },
+        { id: 'b-a1-text', displayGroupId: 'g-a1-text', text: 'Sonnet answer' },
+        { id: 'b-a1-think', displayGroupId: 'g-a1-steps', summaries: [{ summary: 'Weighing the question' }], thinkingDisplay: { startedAt: '2026-10-20T10:00:01Z', completedAt: '2026-10-20T10:00:04Z' } },
+        { id: 'b-a1-tool', displayGroupId: 'g-a1-steps', index: 1, title: 'Searched the web', toolDisplayName: 'Web search', inputSummary: 'claude mod', inputSummaryKind: 'INPUT_SUMMARY_KIND_QUERY', rowKind: 'TOOL_ROW_KIND_WEB_SEARCH', state: 'CONTENT_BLOCK_STATE_COMPLETE',
+          inputDisplay: { table: { rows: [{ label: 'Query', value: 'claude models', inputKey: 'query' }, { label: 'Proto', value: 'kept as a field', inputKey: '__proto__' }] } },
+          displayContent: { richItems: { items: [{ title: 'Models overview', url: 'https://example.com/models' }, { title: '', url: '' }] } } },
+        { id: 'b-a2', displayGroupId: 'g-a2', text: 'Opus answer' },
+        { id: 'b-a2-card', displayGroupId: 'g-a2', index: 1, displayContent: { weather: { location: 'Somewhere' } } },
+      ],
+    },
+  };
+  const rpcRequests = [];
+  const raw = await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [], fetchImpl: async (url, options) => {
+    if (isList(url)) return claudeResponse(200, [{ uuid: 'org-one' }]);
+    if (!isRpc(url)) return claudeResponse(404, {});
+    rpcRequests.push({ url, options });
+    return claudeResponse(200, timeline);
+  } });
+  assert.equal(rpcRequests.length, 1);
+  assert.equal(rpcRequests[0].url, rpcUrl('ReadConversation'));
+  assert.equal(rpcRequests[0].options.method, 'POST');
+  assert.equal(rpcRequests[0].options.credentials, 'same-origin');
+  assert.deepEqual(rpcRequests[0].options.headers, {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    'Connect-Protocol-Version': '1',
+    'X-Organization-Uuid': 'org-one',
+    'Anthropic-Client-Platform': 'web_claude_ai',
+  });
+  assert.deepEqual(JSON.parse(rpcRequests[0].options.body), { conversationId: id });
+
+  const merged = normalizeClaudeConversation(raw, id);
+  assert.equal(merged.title, 'Merged chat');
+  assert.equal(merged.model, 'claude-opus-5-5');
+  assert.equal(merged.sourceShape, 'claude-rpc-timeline');
+  assert.equal(merged.stats.historyIncomplete, false);
+  assert.deepEqual(merged.messages.map((message) => message.id), ['u1', 'a2'], 'the current leaf leads');
+  assert.deepEqual(merged.branches.map((branch) => branch.leafId), ['a2', 'a1']);
+  const byId = new Map(merged.branches.flatMap((branch) => branch.messages).map((message) => [message.id, message]));
+  assert.equal(byId.get('u1').role, 'user');
+  assert.equal(byId.get('u1').createdAt, '2026-10-20T10:00:00Z');
+  assert.deepEqual(byId.get('u1').textBlocks.map((block) => block.type), ['text', 'image', 'omitted']);
+  assert.equal(byId.get('u1').textBlocks[0].text, 'Compare the models');
+  assert.deepEqual(byId.get('u1').textBlocks[1].asset, { pointer: '/api/org-one/files/f1/preview', mimeType: '', sizeBytes: 2048, width: 400, height: 300, generated: false, imageModel: null });
+  // The model is named only where Claude answered with another model than the one asked for.
+  assert.equal(byId.get('a1').modelSlug, 'claude-sonnet-4-5');
+  assert.equal(byId.get('a2').modelSlug, null);
+  const a1 = byId.get('a1').textBlocks;
+  assert.deepEqual(a1.map((block) => block.type), ['thinking', 'tool_use', 'tool_result', 'text', 'text']);
+  assert.deepEqual(a1[0].summaries, ['Weighing the question']);
+  assert.equal(a1[0].durationMs, 3000);
+  assert.equal(a1[0].withheldByProvider, true);
+  assert.equal(a1[1].toolName, 'Web search');
+  assert.equal(a1[1].status, 'Searched the web');
+  assert.equal(JSON.stringify(a1[1].input), '{"query":"claude models","__proto__":"kept as a field"}', 'the full input table, not the cut-short summary');
+  assert.equal(a1[2].text, 'Models overview\nhttps://example.com/models');
+  assert.equal(a1[3].text, 'Sonnet answer');
+  assert.equal(a1[4].text, '```python\nprint("hi")\n```');
+  assert.deepEqual(byId.get('a2').textBlocks, [{ type: 'text', text: 'Opus answer' }, { type: 'omitted', reason: 'Claude weather card content' }]);
+
+  const shown = messagesFromBranchTree(merged.branchTree);
+  const mergedHtml = renderConversationHtml({ ...merged, stats: deriveExportStats(shown, merged.stats, { model: merged.model }) }, { includeAllBranches: true, includeThinking: true });
+  assert.match(mergedHtml, /Models used: claude-opus-5-5, claude-sonnet-4-5/);
+  assert.match(mergedHtml, /<pre class="code-block" data-language="python"><code>print\(&quot;hi&quot;\)<\/code><\/pre>/);
+  assert.match(mergedHtml, /Weighing the question/);
+  assert.doesNotMatch(mergedHtml, /did not return the earliest part/);
+
+  // A server set to .proto names and enum numbers gives the same conversation.
+  const snake = normalizeClaudeConversation(await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [], fetchImpl: async (url) => {
+    if (isList(url)) return claudeResponse(200, []);
+    if (!isRpc(url)) return claudeResponse(404, {});
+    return claudeResponse(200, { outcome: 1, update: {
+      conversation: { id, title: 'Snake', current_leaf_message_id: 's2' },
+      messages: [{ id: 's1', role: 1, created_at: { seconds: '1792490400', nanos: 0 } }, { id: 's2', role: 2, index: 1, parent_message_id: 's1' }],
+      display_groups: [{ id: 'g1', message_id: 's1' }, { id: 'g2', message_id: 's2' }],
+      content_blocks: [{ id: 'c1', display_group_id: 'g1', text: 'hello' }, { id: 'c2', display_group_id: 'g2', text: 'const x = 1;', text_format: { style: 3, language: 'js' } }],
+    } });
+  } }), id);
+  assert.deepEqual(snake.messages.map((message) => [message.role, message.textBlocks[0].text]), [['user', 'hello'], ['assistant', '```js\nconst x = 1;\n```']]);
+  assert.equal(snake.messages[0].createdAt, '2026-10-20T10:00:00.000Z');
+
+  // A long chat's first answer can hold only its latest part, with a cursor for the rest.
+  const pageBodies = [];
+  const paged = normalizeClaudeConversation(await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [], fetchImpl: async (url, options) => {
+    if (isList(url)) return claudeResponse(200, []);
+    if (!isRpc(url)) return claudeResponse(404, {});
+    const body = JSON.parse(options.body);
+    pageBodies.push([new URL(url).pathname.split('/').at(-1), body.cursor ?? null]);
+    if (!body.cursor) return claudeResponse(200, { update: { conversation: { id, title: 'Paged', currentLeafMessageId: 'm4' }, olderHistoryCursor: 'cursor-1',
+      messages: [{ id: 'm3', role: 'ROLE_USER', index: 2, parentMessageId: 'm2' }, { id: 'm4', role: 'ROLE_ASSISTANT', index: 3, parentMessageId: 'm3' }],
+      displayGroups: [{ id: 'g3', messageId: 'm3' }, { id: 'g4', messageId: 'm4' }],
+      contentBlocks: [{ id: 'c3', displayGroupId: 'g3', text: 'third' }, { id: 'c4', displayGroupId: 'g4', text: 'fourth' }] } });
+    if (body.cursor === 'cursor-1') return claudeResponse(200, { outcome: 'OUTCOME_PAGE', olderCursor: 'cursor-2', update: {
+      messages: [{ id: 'm1', role: 'ROLE_USER' }, { id: 'm2', role: 'ROLE_ASSISTANT', index: 1, parentMessageId: 'm1' }],
+      displayGroups: [{ id: 'g1', messageId: 'm1' }, { id: 'g2', messageId: 'm2' }],
+      contentBlocks: [{ id: 'c1', displayGroupId: 'g1', text: 'first' }, { id: 'c2', displayGroupId: 'g2', text: 'second' }] } });
+    return claudeResponse(200, { outcome: 'OUTCOME_PAGE', update: { messages: [] } });
+  } }), id);
+  assert.deepEqual(pageBodies, [['ReadConversation', null], ['ReadConversationHistory', 'cursor-1'], ['ReadConversationHistory', 'cursor-2']]);
+  assert.deepEqual(paged.messages.map((message) => message.textBlocks[0].text), ['first', 'second', 'third', 'fourth']);
+  assert.equal(paged.stats.historyIncomplete, false);
+
+  // A history page that fails, or a cursor that repeats, ends the read; the export says the
+  // chat is incomplete instead of passing part of it off as all of it.
+  for (const failure of [() => claudeResponse(500, {}), () => claudeResponse(200, { outcome: 'OUTCOME_PAGE', olderCursor: 'cursor-1', update: { messages: [] } }), () => claudeResponse(200, { outcome: 'OUTCOME_STALE_VIEW' })]) {
+    const partial = normalizeClaudeConversation(await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [], fetchImpl: async (url, options) => {
+      if (isList(url)) return claudeResponse(200, []);
+      if (!isRpc(url)) return claudeResponse(404, {});
+      if (JSON.parse(options.body).cursor) return failure();
+      return claudeResponse(200, { update: { olderHistoryCursor: 'cursor-1', messages: [{ id: 'late', role: 'ROLE_USER', index: 7 }], displayGroups: [{ id: 'g', messageId: 'late' }], contentBlocks: [{ id: 'c', displayGroupId: 'g', text: 'late prompt' }] } });
+    } }), id);
+    assert.equal(partial.stats.historyIncomplete, true);
+    assert.match(renderConversationHtml(partial), /flag-warn">Coverage: Claude did not return the earliest part of this chat, so this export starts partway through\./);
+  }
+
+  // An organization not on the new layout answers 403 permission_denied; the next one is asked.
+  const orgHeaders = [];
+  const secondOrg = await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [], fetchImpl: async (url, options) => {
+    if (isList(url)) return claudeResponse(200, [{ uuid: 'org-one' }, { uuid: 'org-two' }]);
+    if (!isRpc(url)) return claudeResponse(404, {});
+    orgHeaders.push(options.headers['X-Organization-Uuid']);
+    return options.headers['X-Organization-Uuid'] === 'org-two' ? claudeResponse(200, timeline) : claudeResponse(403, { code: 'permission_denied', message: 'This feature is not included in your current plan' });
+  } });
+  assert.deepEqual(orgHeaders, ['org-one', 'org-two']);
+  assert.equal(secondOrg.name, 'Merged chat');
+
+  // The service refuses too: the report names Claude's page's RPC calls by method and the
+  // service's answer by status and error code, never its message text.
+  const refused = await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [
+    { name: rpcUrl('StreamTimeline'), startTime: 5, responseStatus: 200, initiatorType: 'fetch' },
+    { name: 'https://claude.ai/v1/code/sessions/cse_01AbCdEfGhIjKlMnOpQrSt', startTime: 6, responseStatus: 200, initiatorType: 'fetch' },
+  ], fetchImpl: async (url) => {
+    if (isList(url)) return claudeResponse(200, [{ uuid: 'org-one' }]);
+    return isRpc(url) ? claudeResponse(404, { code: 'not_found', message: 'secret service text' }) : claudeResponse(404, {});
+  } }).catch((error) => error);
+  assert.equal(refused.code, 'not-found');
+  const refusedReport = describeClaudeError(refused);
+  assert.match(refusedReport, /^Claude’s page loads this chat through Claude’s new chat service, not the chat API\. The exporter asked that service too, and it did not return the chat\./);
+  assert.match(refusedReport, /Claude’s new chat service: ReadConversation \(HTTP 404, not_found\)$/m);
+  assert.match(refusedReport, /other recent API requests: \/v1\/code\/sessions\/<cse_id> \(HTTP 200\) \| \/claudeai-rpc\/anthropic\.bard\.api\.v1alpha\.ConversationService\/StreamTimeline \(HTTP 200\)/);
+  assert.doesNotMatch(refusedReport, /secret service text|01AbCdEf|bbbbbbbb/);
+
+  // A 200 that carries no conversation is recorded, and the next organization is asked.
+  const empty = await fetchClaudeConversation(id, { organizationId: 'org-one', resourceEntries: [], fetchImpl: async (url) => {
+    if (isList(url)) return claudeResponse(200, []);
+    return isRpc(url) ? claudeResponse(200, { outcome: 'OUTCOME_NOT_MODIFIED' }) : claudeResponse(404, {});
+  } }).catch((error) => error);
+  assert.match(describeClaudeError(empty), /Claude’s new chat service: ReadConversation \(HTTP 200, no conversation, OUTCOME_NOT_MODIFIED\)/);
+
+  // RPC paths keep their service and method names; identifiers elsewhere are still replaced.
+  assert.equal(redactClaudePath('/claudeai-rpc/anthropic.bard.api.v1alpha.ConversationService/ReadConversationHistory'), '/claudeai-rpc/anthropic.bard.api.v1alpha.ConversationService/ReadConversationHistory');
+  assert.equal(redactClaudePath('/api/organizations/AbCdEfGhIjKlMnOp/StreamTimeline'), '/api/organizations/<id>/<id>');
+  assert.equal(redactClaudePath('/claudeai-rpc/0f8fad5b-d9cb-469f-a165-70867728950e/Read'), '/claudeai-rpc/<id>/Read');
 }
 
 // No published capture shows a model on a Claude reply. If a reply carries one under any
@@ -1044,7 +1229,7 @@ assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.16\.3/);
+assert.match(buildSource, /@version      0\.16\.4/);
 // The script runs on the whole host so a chat started on the home page gets the button
 // without a reload; the route check decides where the button shows.
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/*\n'));

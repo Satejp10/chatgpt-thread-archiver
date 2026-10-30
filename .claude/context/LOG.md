@@ -363,3 +363,22 @@ new layout.
 **Open:** If resumed: capture which `/claudeai-rpc/` method and which request body Claude's
 page sends when it opens a failing chat (DevTools, Network, names only), and whether
 `/v1/code/sessions/<cse_id>` returns the messages. Live acceptance of the v0.16.5 rail.
+
+## 2026-10-30 — Claude 404 theory (parked, for future work)
+
+**Did:** Owner sent a third report from the failing chat (v0.16.5): chat API 404 in both
+organizations and on `consistency=strong`; `ReadConversation (HTTP 404, not_found) |
+ReadConversation (HTTP 403, permission_denied)`; the page's only request naming the chat is
+`…/composer_notices`; its other requests include `/v1/code/sessions/<cse_id> (HTTP 200)` and
+`/claudeai-rpc/…/ConversationService/ReportViewing (HTTP 200)`. The owner notes this chat has
+no effort-level picker and may have been started before chat and Cowork merged.
+
+**Theory (unverified):** The chat is stored as a Cowork-style session (`cse_…`), not as a
+regular chat. Signs: the page loads `/v1/code/sessions/<cse_id>` for it, and neither the chat
+API nor the new chat service knows the chat UUID in the address. A chat started before the
+merge, possibly as a Cowork task, and the missing effort picker both fit, but no source
+confirms what the missing picker means.
+
+**Open:** To test it: in DevTools, Network, on the failing chat, check whether
+`/v1/code/sessions/<cse_id>` (or a request under it) returns the messages, and which ID it is
+keyed on. If so, add a session reader as a third fallback after `ReadConversation`.

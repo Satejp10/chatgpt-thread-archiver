@@ -1,4 +1,4 @@
-const ARCHIVER_VERSION = '0.16.3';
+const ARCHIVER_VERSION = '0.16.4';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -996,6 +996,9 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
   const coverageLine = (conversation.stats.droppedNodeCount ?? 0) > 0 || (conversation.stats.duplicateMessageCount ?? 0) > 0
     ? `<p class="meta flag-warn">Coverage: ${conversation.stats.droppedNodeCount ?? 0} dropped node${conversation.stats.droppedNodeCount === 1 ? '' : 's'}, ${conversation.stats.duplicateMessageCount ?? 0} duplicate message${conversation.stats.duplicateMessageCount === 1 ? '' : 's'} removed</p>`
     : '';
+  const historyLine = conversation.stats.historyIncomplete === true
+    ? `<p class="meta flag-warn">Coverage: ${escapeHtml(provider)} did not return the earliest part of this chat, so this export starts partway through.</p>`
+    : '';
   // A conversation with tool calls carries more supporting blocks than answers, so an
   // export that leaves them out says so once rather than marking each one.
   const reasoningCount = renderedMessages.reduce((sum, message) => sum + (message.textBlocks ?? []).filter((block) => THINKING_BLOCK_TYPES.has(block.type)).length, 0);
@@ -1041,6 +1044,7 @@ ${idMeta}
   ${imageLine}
   ${reasoningLine}
   ${coverageLine}
+  ${historyLine}
   ${alternateLine}
   ${hiddenLine}
   ${branchNavigator}

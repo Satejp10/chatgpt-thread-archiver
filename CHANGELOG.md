@@ -2,6 +2,26 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.16.4] — 2026-10-30
+
+### Fixed
+
+**Claude chats in Claude's new layout failed with a 404.** The owner's v0.16.3 report showed why. Claude's page asked the chat API only for the chat's composer notices, and among its other requests was one to `/claudeai-rpc/…`, Claude's new chat service. The chat API answered 404 in both organizations and on the retry. According to the notes of Claude-QoL, a third-party extension, chats in the new layout load through that service (`ConversationService/StreamTimeline`). Now, when the chat API refuses a chat everywhere, the exporter asks the service's `ReadConversation` call, in the same organizations, and builds the export from its answer: text, every version of each message, thinking, tool calls, code and images. Other cards Claude's page draws, such as a weather card, are marked as omitted. Whether the service answers for the owner's failing chats is unconfirmed until a live test.
+
+### Changed
+
+**The 404 report names the new chat service's calls.** v0.16.3 showed `/claudeai-rpc/<id>/<id>`, which hid which call Claude's page made. A call name such as `anthropic.bard.api.v1alpha.ConversationService/StreamTimeline` carries no identifier, so it is now kept. When the service also refuses the chat, the report says so first and lists each answer, for example `Claude’s new chat service: ReadConversation (HTTP 404, not_found)`.
+
+**A reply Claude answered with a different model shows that model.** Per the schema notes published by Claude-QoL's author, the new chat service marks a reply that Claude answered with another model than the one asked for. For chats read from that service, such a reply now shows the model that answered, and the header lists it under `Models used`.
+
+**Partial history is flagged.** The new chat service returns long chats in pages. If it stops before the start of the chat, the header says the export starts partway through.
+
+### Notes
+
+**Claude does not appear to record which model wrote each reply.** The owner's v0.16.3 export of a "hi" chat retried with three models found three versions and no model on any reply. The chat API names one model for the whole chat. Per the same schema notes, the new chat service does too, apart from the different-model case above. So a reply written after switching models in the picker shows `Model: unknown / not found`, and the header names the chat's current model.
+
+**Claude's new layout hides the ‹ 1/3 › arrows on retried and edited messages.** Claude-QoL's notes say Claude hides them for versions made after an account moved to the new layout, because every version shares one file workspace that does not roll back. Older versions keep their arrows. Anthropic's app changelog has no entry about it. Claude still stores every version, and an **All branches** export still shows each one with ‹ 1/N ›.
+
 ## [0.16.3] — 2026-10-27
 
 ### Fixed

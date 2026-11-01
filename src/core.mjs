@@ -1,4 +1,4 @@
-const ARCHIVER_VERSION = '0.16.5';
+const ARCHIVER_VERSION = '0.17.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -746,10 +746,10 @@ function formatModels(conversation) {
   // retried with Haiku, Sonnet and then Opus 5.5 named only Opus 5.5 there.
   const stats = conversation?.stats ?? {};
   if (conversation?.provider === 'Claude' && uniqueModels.length === 1 && stats.replyModelCount === 0 && stats.assistantMessageCount > 0) {
-    return `<p class="meta">Chat model: ${escapeHtml(uniqueModels[0])} (Claude’s data names no model for individual replies)</p>`;
+    return `<p class="meta" data-copy-meta>Chat model: ${escapeHtml(uniqueModels[0])} (Claude’s data names no model for individual replies)</p>`;
   }
   const label = uniqueModels.length === 1 ? 'Model' : 'Models used';
-  return `<p class="meta">${label}: ${escapeHtml(uniqueModels.join(', '))}</p>`;
+  return `<p class="meta" data-copy-meta>${label}: ${escapeHtml(uniqueModels.join(', '))}</p>`;
 }
 
 function messageModelLine(message, includeMessageModels) {
@@ -763,9 +763,514 @@ function railLabel(text) {
   return flat.length > 72 ? `${flat.slice(0, 71)}…` : (flat || 'Untitled prompt');
 }
 
+// Copy chat (v0.17.0). The copied text is Markdown, which is what the chats were written
+// in, and it goes on the clipboard twice: as plain text, and as HTML built from that
+// Markdown. Rich-text apps (Google Docs, Word, Notion) read the HTML; Obsidian turns the
+// HTML back into Markdown by default and takes the plain text with Ctrl/Cmd+Shift+V.
+// Either way headings, lists, tables and code keep their structure.
+//
+// These two functions run inside the exported file. They are serialized into it with
+// toString(), so they must not use anything else in this module. This one is pure, so the
+// tests call it directly. Everything is escaped: nothing in a chat becomes live HTML.
+export function copyMarkdownToHtml(markdown) {
+  var MAX_DEPTH = 12;
+  var FENCE = /^ {0,3}(`{3,}|~{3,})[ \t]*([^\s`]*)[^`]*$/;
+  var HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+  var RULE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+  var QUOTE = /^ {0,3}> ?/;
+  var LIST = /^( *)([-*+]|\d{1,9}[.)])(?:[ \t]+(.*)|[ \t]*$)/;
+  var DELIMITER = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+  var BLANK = /^[ \t]*$/;
+
+  function esc(value) {
+    return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function safeHref(url) {
+    var value = String(url || '').trim();
+    return /^(?:https?:|mailto:)/i.test(value) ? value : '';
+  }
+  function link(href, html) {
+    return '<a href="' + esc(href) + '">' + html + '</a>';
+  }
+  // Code spans, links and escapes are set aside as numbered tokens (private-use
+  // characters) so emphasis cannot reach into them, then put back at the end. A link's
+  // label can hold tokens of its own, so they share one list and are put back in passes.
+  function inline(text, depth) {
+    var slots = [];
+    var html = inlineTokens(String(text).replace(/[]/g, ''), depth, slots);
+    for (var pass = 0; pass < 8 && /\d+/.test(html); pass++) {
+      html = html.replace(/(\d+)/g, function (match, index) { return slots[Number(index)]; });
+    }
+    return html;
+  }
+  function inlineTokens(text, depth, slots) {
+    var keep = function (html) { slots.push(html); return '' + (slots.length - 1) + ''; };
+    var out = text.replace(/(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/g, function (match, ticks, code) {
+      var body = /^ [\s\S]* $/.test(code) && /[^ ]/.test(code) ? code.slice(1, -1) : code;
+      return keep('<code>' + esc(body) + '</code>');
+    });
+    out = out.replace(/\\([!-\/:-@\[-`{-~])/g, function (match, character) { return keep(esc(character)); });
+    // An image keeps only its description: the copy is text.
+    out = out.replace(/!\[([^\]]*)\]\([^)]*\)/g, function (match, alt) { return alt ? keep(esc(alt)) : ''; });
+    out = out.replace(/\[([^\]]+)\]\(\s*<?([^\s)>]+)>?(?:\s+"[^"]*")?\s*\)/g, function (match, label, url) {
+      var href = safeHref(url);
+      var html = depth < MAX_DEPTH ? inlineTokens(label, depth + 1, slots) : esc(label);
+      return keep(href ? link(href, html) : html);
+    });
+    out = out.replace(/<((?:https?:\/\/|mailto:)[^\s<>]+)>/gi, function (match, url) { return keep(link(url, esc(url))); });
+    // A bare address ends before trailing punctuation, and before a ")" it did not open,
+    // so "(see https://x.org/a)" and "https://x.org/a_(b)" both come out right.
+    out = out.replace(/\bhttps?:\/\/[^\s<>"']+/gi, function (match) {
+      var url = match;
+      for (;;) {
+        var last = url.slice(-1);
+        if (/[.,:;!?*_~\]}'"]/.test(last)) url = url.slice(0, -1);
+        else if (last === ')' && url.split(')').length > url.split('(').length) url = url.slice(0, -1);
+        else break;
+      }
+      return keep(link(url, esc(url))) + match.slice(url.length);
+    });
+    return esc(out)
+      .replace(/(^|[^A-Za-z0-9_*])\*\*(?=[^\s*])([^*\n]*?[^\s*])\*\*(?![A-Za-z0-9_*])/g, '$1<strong>$2</strong>')
+      .replace(/(^|[^A-Za-z0-9_])__(?=[^\s_])([^_\n]*?[^\s_])__(?![A-Za-z0-9_])/g, '$1<strong>$2</strong>')
+      .replace(/(^|[^A-Za-z0-9_*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![A-Za-z0-9_*])/g, '$1<em>$2</em>')
+      .replace(/(^|[^A-Za-z0-9_])_(?=[^\s_])([^_\n]*?[^\s_])_(?![A-Za-z0-9_])/g, '$1<em>$2</em>')
+      .replace(/~~(?=\S)([^~\n]*?\S)~~/g, '<del>$1</del>')
+      .replace(/\n/g, '<br>');
+  }
+  function indentOf(line) {
+    return line.match(/^ */)[0].length;
+  }
+  function splitRow(line) {
+    var row = line.trim();
+    if (row.charAt(0) === '|') row = row.slice(1);
+    if (row.slice(-1) === '|' && row.slice(-2) !== '\\|') row = row.slice(0, -1);
+    var cells = [];
+    var cell = '';
+    for (var k = 0; k < row.length; k++) {
+      if (row.charAt(k) === '\\' && row.charAt(k + 1) === '|') { cell += '\\|'; k++; continue; }
+      if (row.charAt(k) === '|') { cells.push(cell.trim()); cell = ''; continue; }
+      cell += row.charAt(k);
+    }
+    cells.push(cell.trim());
+    return cells;
+  }
+  function isTableStart(src, i) {
+    return i + 1 < src.length && src[i].indexOf('|') >= 0 && DELIMITER.test(src[i + 1]) && splitRow(src[i]).length === splitRow(src[i + 1]).length;
+  }
+  function startsBlock(src, i) {
+    var line = src[i];
+    var item = line.match(LIST);
+    return FENCE.test(line) || HEADING.test(line) || RULE.test(line) || QUOTE.test(line) || Boolean(item && item[3] && item[3].trim()) || isTableStart(src, i);
+  }
+  function table(src, i, depth) {
+    var head = splitRow(src[i]);
+    var align = splitRow(src[i + 1]).map(function (cell) {
+      var left = cell.charAt(0) === ':';
+      var right = cell.slice(-1) === ':';
+      return left && right ? 'center' : right ? 'right' : left ? 'left' : '';
+    });
+    var cellHtml = function (tag, text, index) {
+      var style = align[index] ? ' style="text-align:' + align[index] + '"' : '';
+      return '<' + tag + style + '>' + inline(text || '', depth) + '</' + tag + '>';
+    };
+    var html = '<table><thead><tr>' + head.map(function (text, index) { return cellHtml('th', text, index); }).join('') + '</tr></thead><tbody>';
+    i += 2;
+    while (i < src.length && !BLANK.test(src[i]) && src[i].indexOf('|') >= 0) {
+      var cells = splitRow(src[i]);
+      html += '<tr>' + head.map(function (unused, index) { return cellHtml('td', cells[index], index); }).join('') + '</tr>';
+      i++;
+    }
+    return { html: html + '</tbody></table>', next: i };
+  }
+  function list(src, i, depth) {
+    var first = src[i].match(LIST);
+    var ordered = /\d/.test(first[2]);
+    var base = first[1].length;
+    var start = ordered ? parseInt(first[2], 10) : 1;
+    var items = [];
+    var loose = false;
+    while (i < src.length) {
+      var marker = src[i].match(LIST);
+      if (!marker || RULE.test(src[i]) || /\d/.test(marker[2]) !== ordered || marker[1].length > base + 3) break;
+      var contentIndent = marker[1].length + marker[2].length + 1;
+      var lines = [marker[3] || ''];
+      i++;
+      while (i < src.length) {
+        var line = src[i];
+        if (BLANK.test(line)) {
+          var after = i + 1;
+          while (after < src.length && BLANK.test(src[after])) after++;
+          if (after < src.length && indentOf(src[after]) > base) {
+            for (; i < after; i++) lines.push('');
+            loose = true;
+            continue;
+          }
+          break;
+        }
+        var indent = indentOf(line);
+        if (indent > base) { lines.push(line.slice(Math.min(indent, contentIndent))); i++; continue; }
+        if (LIST.test(line) || startsBlock(src, i)) break;
+        lines.push(line);
+        i++;
+      }
+      items.push(lines);
+      var next = i;
+      while (next < src.length && BLANK.test(src[next])) next++;
+      var sibling = next < src.length ? src[next].match(LIST) : null;
+      if (next > i && sibling && !RULE.test(src[next]) && /\d/.test(sibling[2]) === ordered && sibling[1].length <= base + 3) { loose = true; i = next; }
+    }
+    var tag = ordered ? 'ol' : 'ul';
+    var html = '<' + tag + (ordered && start !== 1 ? ' start="' + start + '"' : '') + '>' + items.map(function (lines) {
+      var task = lines[0].match(/^\[([ xX])\][ \t]+/);
+      var box = '';
+      if (task) {
+        box = '<input type="checkbox" disabled' + (task[1] === ' ' ? '' : ' checked') + '> ';
+        lines = [lines[0].slice(task[0].length)].concat(lines.slice(1));
+      }
+      return '<li>' + box + blocks(lines, !loose, depth + 1) + '</li>';
+    }).join('') + '</' + tag + '>';
+    return { html: html, next: i };
+  }
+  function blocks(src, tight, depth) {
+    if (depth > MAX_DEPTH) return '<p>' + esc(src.join('\n')).replace(/\n/g, '<br>') + '</p>';
+    var out = [];
+    var i = 0;
+    while (i < src.length) {
+      var line = src[i];
+      var match;
+      if (BLANK.test(line)) { i++; continue; }
+      if ((match = line.match(FENCE))) {
+        var fence = match[1];
+        var close = new RegExp('^ {0,3}' + (fence.charAt(0) === '`' ? '`' : '~') + '{' + fence.length + ',}[ \\t]*$');
+        var body = [];
+        for (i++; i < src.length && !close.test(src[i]); i++) body.push(src[i]);
+        i++;
+        out.push('<pre><code' + (match[2] ? ' class="language-' + esc(match[2]) + '"' : '') + '>' + esc(body.join('\n')) + '</code></pre>');
+        continue;
+      }
+      if ((match = line.match(HEADING))) {
+        var level = match[1].length;
+        out.push('<h' + level + '>' + inline(match[2] || '', depth) + '</h' + level + '>');
+        i++;
+        continue;
+      }
+      if (RULE.test(line)) { out.push('<hr>'); i++; continue; }
+      if (QUOTE.test(line)) {
+        var quoted = [];
+        while (i < src.length && QUOTE.test(src[i])) quoted.push(src[i++].replace(QUOTE, ''));
+        out.push('<blockquote>' + blocks(quoted, false, depth + 1) + '</blockquote>');
+        continue;
+      }
+      if (isTableStart(src, i)) {
+        var parsedTable = table(src, i, depth);
+        out.push(parsedTable.html);
+        i = parsedTable.next;
+        continue;
+      }
+      if (LIST.test(line)) {
+        var parsedList = list(src, i, depth);
+        out.push(parsedList.html);
+        i = parsedList.next;
+        continue;
+      }
+      var paragraph = [line.trim()];
+      for (i++; i < src.length && !BLANK.test(src[i]) && !startsBlock(src, i); i++) paragraph.push(src[i].trim());
+      var html = inline(paragraph.join('\n'), depth);
+      out.push(tight ? html : '<p>' + html + '</p>');
+    }
+    return out.join('');
+  }
+  var source = String(markdown || '').replace(/\r\n?/g, '\n').split('\n').map(function (line) {
+    return line.replace(/^[ \t]+/, function (lead) { return lead.replace(/\t/g, '    '); });
+  });
+  return blocks(source, false, 0);
+}
+
+// The exported file's copy buttons. It rebuilds each message's Markdown from the page:
+// the export keeps the chat's own lines (headings, list markers, table rows) as text and
+// turns only bold, italics, inline code and code blocks into tags, so those are turned
+// back. Choices are kept in this browser's storage, like the theme.
+function exportCopyRuntime(markdownToHtml) {
+  var STORE = 'chatgpt-thread-archiver-copy-options';
+  var DEFAULTS = { speakers: true, thinking: false, tools: false, times: false, models: false, title: true, details: false, placeholders: false, hidden: false };
+  var options = {};
+  var name;
+  for (name in DEFAULTS) options[name] = DEFAULTS[name];
+  try {
+    var saved = JSON.parse(localStorage.getItem(STORE) || 'null');
+    if (saved && typeof saved === 'object') for (name in DEFAULTS) if (typeof saved[name] === 'boolean') options[name] = saved[name];
+  } catch (error) {}
+  var bar = document.getElementById('copy-bar');
+
+  // A choice whose content is not in this file is shown greyed out and counts as off.
+  function on(option) {
+    var box = bar && bar.querySelector('[data-copy-opt="' + option + '"]');
+    return options[option] === true && !(box && box.disabled);
+  }
+  function repeat(text, count) {
+    return new Array(count + 1).join(text);
+  }
+  function longestRun(text, character) {
+    var runs = text.match(new RegExp('\\' + character + '+', 'g')) || [];
+    var longest = 0;
+    for (var r = 0; r < runs.length; r++) longest = Math.max(longest, runs[r].length);
+    return longest;
+  }
+  function fence(text, language) {
+    var ticks = repeat('`', Math.max(3, longestRun(text, '`') + 1));
+    return ticks + (language || '') + '\n' + text.replace(/\n+$/, '') + '\n' + ticks;
+  }
+  function codeSpan(text) {
+    var ticks = repeat('`', longestRun(text, '`') + 1);
+    var pad = /^`|`$/.test(text) ? ' ' : '';
+    return ticks + pad + text + pad + ticks;
+  }
+  function inlineMarkdown(node) {
+    var out = '';
+    for (var child = node.firstChild; child; child = child.nextSibling) {
+      if (child.nodeType === 3) { out += child.nodeValue; continue; }
+      if (child.nodeType !== 1) continue;
+      var tag = child.tagName;
+      if (tag === 'BR') out += '\n';
+      else if (tag === 'STRONG' || tag === 'B') out += '**' + inlineMarkdown(child) + '**';
+      else if (tag === 'EM' || tag === 'I') out += '*' + inlineMarkdown(child) + '*';
+      else if (tag === 'CODE') out += codeSpan(child.textContent);
+      else if (tag === 'A') {
+        var href = child.getAttribute('href') || '';
+        var label = inlineMarkdown(child);
+        out += !href ? label : href === label ? '<' + href + '>' : '[' + label + '](' + href + ')';
+      } else out += inlineMarkdown(child);
+    }
+    return out;
+  }
+  function note(text) {
+    return '*' + String(text).trim() + '*';
+  }
+  function quote(markdown) {
+    return markdown.split('\n').map(function (line) { return line ? '> ' + line : '>'; }).join('\n');
+  }
+  function thinkingMarkdown(block) {
+    var summary = block.querySelector(':scope > summary');
+    var parts = ['**' + (summary ? summary.textContent.trim() : 'Thinking') + '**'];
+    for (var child = summary ? summary.nextElementSibling : block.firstElementChild; child; child = child.nextElementSibling) {
+      if (child.tagName === 'UL') {
+        var steps = child.querySelectorAll('li');
+        var lines = [];
+        for (var s = 0; s < steps.length; s++) lines.push('- ' + steps[s].textContent.trim());
+        parts.push(lines.join('\n'));
+      } else if (child.classList.contains('thinking-text')) {
+        for (var t = child.firstElementChild; t; t = t.nextElementSibling) parts.push(t.tagName === 'PRE' ? fence(t.textContent, '') : inlineMarkdown(t));
+      } else if (child.classList.contains('thinking-note')) parts.push(note(child.textContent));
+    }
+    return quote(parts.join('\n\n'));
+  }
+  function toolMarkdown(block) {
+    var head = block.querySelector(':scope > .tool-head');
+    var summary = block.querySelector(':scope > summary');
+    var title;
+    if (head) {
+      var tag = head.querySelector('.tool-tag');
+      title = '**Tool call:** ' + head.textContent.slice(tag ? tag.textContent.length : 0).trim();
+    } else title = '**' + (summary ? summary.textContent.trim() : 'Tool') + '**';
+    var parts = [title];
+    var pre = block.querySelector('pre');
+    var empty = block.querySelector('.thinking-note');
+    if (pre) parts.push(fence(pre.textContent, pre.classList.contains('tool-input') ? 'json' : ''));
+    else if (empty) parts.push(note(empty.textContent));
+    return parts.join('\n\n');
+  }
+  function blockMarkdown(block) {
+    var tag = block.tagName;
+    var classes = block.classList;
+    if (classes.contains('thinking-block')) return on('thinking') ? thinkingMarkdown(block) : '';
+    if (classes.contains('tool-block')) return on('tools') ? toolMarkdown(block) : '';
+    if (tag === 'FIGURE') {
+      var image = block.querySelector('img');
+      return on('placeholders') ? note('[' + ((image && image.getAttribute('alt')) || 'Image') + ' not copied]') : '';
+    }
+    if (classes.contains('omitted') || classes.contains('empty-message')) return on('placeholders') ? note(block.textContent) : '';
+    if (tag === 'PRE') return fence((block.querySelector('code') || block).textContent, block.getAttribute('data-language') || '');
+    if (tag === 'P') return inlineMarkdown(block);
+    return block.textContent.trim();
+  }
+  function messageHeader(article) {
+    var heading = article.querySelector('.message-header h2');
+    if (!heading) return '';
+    var speaker = '';
+    for (var child = heading.firstChild; child; child = child.nextSibling) if (child.nodeType === 3) speaker += child.nodeValue;
+    var bits = [];
+    if (on('speakers') && speaker.trim()) bits.push('**' + speaker.trim() + '**');
+    var model = heading.querySelector('.msg-model');
+    var modelName = model ? model.textContent.replace(/^Model:\s*/, '').trim() : '';
+    if (on('models') && modelName && modelName !== 'unknown / not found') bits.push(modelName);
+    var time = heading.querySelector('time');
+    if (on('times') && time) bits.push(time.textContent.trim());
+    return bits.join(' · ');
+  }
+  // The message's text, without its header; empty when every block was left out.
+  function messageBody(article) {
+    var content = article.querySelector('.content');
+    var parts = [];
+    for (var block = content ? content.firstElementChild : null; block; block = block.nextElementSibling) {
+      var markdown = blockMarkdown(block);
+      if (markdown && markdown.trim()) parts.push(markdown);
+    }
+    return parts.join('\n\n');
+  }
+  // What is on screen: one version of each fork, as the reader has set them.
+  function shownMessages() {
+    var all = document.querySelectorAll('article.message');
+    var shown = [];
+    for (var m = 0; m < all.length; m++) {
+      var article = all[m];
+      if (article.parentNode && article.parentNode.closest && article.parentNode.closest('[hidden]')) continue;
+      if (article.classList.contains('message-hidden') && !on('hidden')) continue;
+      if (article.classList.contains('message-tool') && !on('tools')) continue;
+      shown.push(article);
+    }
+    return shown;
+  }
+  function chatMarkdown() {
+    var parts = [];
+    var title = document.querySelector('.export-head h1');
+    if (on('title') && title && title.textContent.trim()) parts.push('# ' + title.textContent.trim());
+    if (on('details')) {
+      var details = document.querySelectorAll('.export-head [data-copy-meta]');
+      var lines = [];
+      for (var d = 0; d < details.length; d++) lines.push('- ' + inlineMarkdown(details[d]).trim());
+      if (lines.length) parts.push(lines.join('\n'));
+    }
+    var messages = shownMessages();
+    var chunks = [];
+    for (var m = 0; m < messages.length; m++) {
+      var body = messageBody(messages[m]);
+      if (!body) continue;
+      var header = messageHeader(messages[m]);
+      chunks.push(header ? header + '\n\n' + body : body);
+    }
+    if (chunks.length) parts.push(chunks.join('\n\n---\n\n'));
+    return { markdown: parts.join('\n\n') + '\n', count: chunks.length };
+  }
+
+  // The copy event is the one path that puts both formats on the clipboard in every
+  // browser, file:// pages included. It needs a selection to fire in some browsers,
+  // hence the throwaway text area. The Clipboard API is the fallback, then plain text.
+  function writeClipboard(markdown, done, fail) {
+    var html = '<meta charset="utf-8">' + markdownToHtml(markdown);
+    var handled = false;
+    var onCopy = function (event) {
+      if (!event.clipboardData) return;
+      event.clipboardData.setData('text/plain', markdown);
+      event.clipboardData.setData('text/html', html);
+      event.preventDefault();
+      handled = true;
+    };
+    var focused = document.activeElement;
+    var holder = document.createElement('textarea');
+    holder.value = ' ';
+    holder.setAttribute('readonly', '');
+    holder.setAttribute('aria-hidden', 'true');
+    holder.tabIndex = -1;
+    holder.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;';
+    document.body.appendChild(holder);
+    holder.select();
+    document.addEventListener('copy', onCopy, true);
+    var copied = false;
+    try { copied = document.execCommand('copy'); } catch (error) { copied = false; }
+    document.removeEventListener('copy', onCopy, true);
+    holder.remove();
+    if (focused && focused.focus) { try { focused.focus({ preventScroll: true }); } catch (error) {} }
+    if (copied && handled) { done(false); return; }
+    var plainOnly = function () {
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(markdown).then(function () { done(true); }, fail);
+      else fail();
+    };
+    if (navigator.clipboard && navigator.clipboard.write && window.ClipboardItem) {
+      try {
+        navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([markdown], { type: 'text/plain' }), 'text/html': new Blob([html], { type: 'text/html' }) })]).then(function () { done(false); }, plainOnly);
+        return;
+      } catch (error) {}
+    }
+    plainOnly();
+  }
+  function flash(button, text) {
+    var label = button.querySelector('[data-copy-label]') || button;
+    if (!button.hasAttribute('data-idle-label')) button.setAttribute('data-idle-label', label.textContent);
+    label.textContent = text;
+    clearTimeout(button.copyTimer);
+    button.copyTimer = setTimeout(function () { label.textContent = button.getAttribute('data-idle-label'); }, 1800);
+  }
+
+  document.addEventListener('click', function (event) {
+    var button = event.target.closest ? event.target.closest('.copy-btn') : null;
+    if (!button) return;
+    var article = button.closest('article.message');
+    var markdown = article ? messageBody(article) : '';
+    if (!markdown) { flash(button, 'Nothing to copy'); return; }
+    writeClipboard(markdown + '\n', function () { flash(button, 'Copied'); }, function () { flash(button, 'Copy failed'); });
+  });
+
+  if (!bar) return;
+  var main = document.getElementById('copy-chat');
+  var toggle = document.getElementById('copy-options-toggle');
+  var panel = document.getElementById('copy-options');
+  var status = document.getElementById('copy-status');
+  var statusTimer = 0;
+  var boxes = panel ? panel.querySelectorAll('[data-copy-opt]') : [];
+  function say(text) {
+    if (!status) return;
+    status.textContent = text;
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(function () { status.textContent = ''; }, 6000);
+  }
+  for (var b = 0; b < boxes.length; b++) (function (box) {
+    var option = box.getAttribute('data-copy-opt');
+    if (!box.disabled) box.checked = options[option] === true;
+    box.addEventListener('change', function () {
+      options[option] = box.checked;
+      try { localStorage.setItem(STORE, JSON.stringify(options)); } catch (error) {}
+    });
+  })(boxes[b]);
+  function setOpen(open) {
+    if (!panel || !toggle) return;
+    panel.hidden = !open;
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  if (toggle) toggle.addEventListener('click', function () { setOpen(panel.hidden); });
+  document.addEventListener('click', function (event) {
+    if (panel && !panel.hidden && !bar.contains(event.target)) setOpen(false);
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && panel && !panel.hidden) {
+      setOpen(false);
+      if (toggle) toggle.focus();
+    }
+  });
+  if (main) main.addEventListener('click', function () {
+    var result = chatMarkdown();
+    setOpen(false);
+    if (!result.count) {
+      flash(main, 'Nothing to copy');
+      say('Every message is left out by the copy options.');
+      return;
+    }
+    var counted = result.count + ' message' + (result.count === 1 ? '' : 's');
+    writeClipboard(result.markdown, function (plainOnly) {
+      flash(main, 'Copied');
+      say(plainOnly ? 'Copied ' + counted + ' as Markdown text. This browser allowed only plain text.' : 'Copied ' + counted + '. Paste it into any app.');
+    }, function () {
+      flash(main, 'Copy failed');
+      say('The browser blocked the clipboard. Try again, or select the text and copy it.');
+    });
+  });
+}
+
+const EXPORT_COPY_JS = `(${exportCopyRuntime.toString()})(${copyMarkdownToHtml.toString()});`;
+
 const EXPORT_CSS = `
-:root { color-scheme: light; --bg: #f9f9f9; --surface: #fff; --text: #24292f; --muted: #57606a; --border: #e0e0e0; --user: #eef2ff; --assistant: #fff; --accent: #10a37f; --link: #0969da; --code-bg: #1f2328; --code-text: #e6edf3; --shadow: rgb(0 0 0 / .05); }
-	html.dark { color-scheme: dark; --bg: #0f1115; --surface: #171a21; --text: #e6edf3; --muted: #9aa4b2; --border: #303744; --user: #25213d; --assistant: #171a21; --accent: #35c89e; --link: #7ab7ff; --code-bg: #090c11; --code-text: #e6edf3; --shadow: rgb(0 0 0 / .3); }
+:root { color-scheme: light; --bg: #f9f9f9; --surface: #fff; --text: #24292f; --muted: #57606a; --border: #e0e0e0; --user: #eef2ff; --assistant: #fff; --accent: #10a37f; --link: #0969da; --code-bg: #1f2328; --code-text: #e6edf3; --shadow: rgb(0 0 0 / .05); --btn: #0b7a5e; --btn-hover: #09664f; --btn-text: #fff; --btn-divider: rgb(255 255 255 / .35); }
+	html.dark { color-scheme: dark; --bg: #0f1115; --surface: #171a21; --text: #e6edf3; --muted: #9aa4b2; --border: #303744; --user: #25213d; --assistant: #171a21; --accent: #35c89e; --link: #7ab7ff; --code-bg: #090c11; --code-text: #e6edf3; --shadow: rgb(0 0 0 / .3); --btn: #35c89e; --btn-hover: #5ad4b0; --btn-text: #06231a; --btn-divider: rgb(6 35 26 / .3); }
 	* { box-sizing: border-box; }
 body { margin: 0; padding: 24px 16px 64px; background: var(--bg); color: var(--text); font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 .wrap { max-width: 820px; margin: 0 auto; }
@@ -808,8 +1313,26 @@ header.export-head { margin-bottom: 24px; }
 .content pre code { background: none; padding: 0; color: inherit; font-size: .88em; }
 .omitted, .empty-message { color: var(--muted); font-style: italic; }
 .export-footer { margin-top: 28px; color: var(--muted); font-size: .82rem; }
-.copy-btn { position: absolute; top: 12px; right: 12px; padding: 4px 10px; background: var(--accent); color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
-.copy-btn:hover { background: #0d8a6a; }
+.copy-btn { position: absolute; top: 12px; right: 12px; padding: 4px 10px; background: var(--btn); color: var(--btn-text); border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.copy-btn:hover { background: var(--btn-hover); }
+.copy-btn:focus-visible, .copy-split button:focus-visible, .copy-options input:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.copy-bar { display: none; position: relative; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 12px 0 14px; }
+html.js .copy-bar { display: flex; }
+.copy-split { display: inline-flex; border-radius: 8px; box-shadow: 0 1px 3px var(--shadow); }
+.copy-split button { display: inline-flex; align-items: center; gap: 7px; margin: 0; padding: 8px 13px; border: 0; background: var(--btn); color: var(--btn-text); font-family: inherit; font-size: 14px; font-weight: 600; line-height: 1.2; cursor: pointer; }
+.copy-split button:hover { background: var(--btn-hover); }
+.copy-split svg { width: 16px; height: 16px; flex: none; }
+.copy-main { border-radius: 8px 0 0 8px; }
+.copy-more { border-radius: 0 8px 8px 0; padding: 8px 9px !important; border-left: 1px solid var(--btn-divider) !important; }
+.copy-more[aria-expanded="true"] svg { transform: rotate(180deg); }
+.copy-status { color: var(--muted); font-size: .85em; }
+.copy-options { position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; width: min(340px, calc(100vw - 32px)); padding: 12px 14px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgb(0 0 0 / .18); font-size: .9rem; }
+.copy-options[hidden] { display: none; }
+.copy-options-title { margin: 0 0 4px; font-weight: 600; }
+.copy-options label { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; cursor: pointer; }
+.copy-options label.is-off { color: var(--muted); cursor: default; }
+.copy-opt-note { font-size: .88em; font-style: italic; }
+.copy-hint { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--border); color: var(--muted); font-size: .88em; line-height: 1.45; }
 	#theme-toggle { position: fixed; top: 12px; left: 10px; padding: 3px 8px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); border-radius: 4px; cursor: pointer; z-index: 51; }
 	#theme-toggle:hover { color: var(--text); }
 	.branch-view[hidden] { display: none; }
@@ -863,17 +1386,7 @@ const EXPORT_JS = [
   '  function setDark(dark) { root.classList.toggle("dark", dark); if (themeToggle) { themeToggle.textContent = dark ? "Light mode" : "Dark mode"; themeToggle.setAttribute("aria-pressed", dark ? "true" : "false"); } try { localStorage.setItem("chatgpt-thread-archiver-theme", dark ? "dark" : "light"); } catch (e) {} }',
   '  var storedTheme = "light"; try { storedTheme = localStorage.getItem("chatgpt-thread-archiver-theme") || "light"; } catch (e) {} setDark(storedTheme === "dark");',
   '  if (themeToggle) themeToggle.addEventListener("click", function () { setDark(!root.classList.contains("dark")); });',
-  '  function copy(text, btn) {',
-  '    var done = function () { btn.textContent = "Copied"; setTimeout(function () { btn.textContent = "Copy"; }, 1600); };',
-  '    var fail = function () { btn.textContent = "Copy failed"; setTimeout(function () { btn.textContent = "Copy"; }, 1600); };',
-  '    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { legacy(text) ? done() : fail(); });',
-  '    else legacy(text) ? done() : fail();',
-  '  }',
-  '  function legacy(text) { try { var ta = document.createElement("textarea"); ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.top = "-1000px"; document.body.appendChild(ta); ta.select(); var ok = document.execCommand("copy"); ta.remove(); return ok; } catch (e) { return false; } }',
-  '  document.addEventListener("click", function (event) {',
-  '    var button = event.target.closest ? event.target.closest(".copy-btn") : null;',
-  '    if (button) { var body = button.parentNode.querySelector(".content"); if (body) copy(body.innerText, button); return; }',
-  '  });',
+  '  // The copy buttons are wired by the copy script that follows this one.',
   '  var onBranchChange = function () {};',
   '  var branchNav = document.getElementById("branch-nav"), branchViews = document.querySelectorAll(".branch-view"), branchPosition = document.getElementById("branch-position"), branchPrev = document.getElementById("branch-prev"), branchNext = document.getElementById("branch-next"), branchCurrent = 0;',
   '  function showBranch(index) { if (!branchViews.length) return; branchCurrent = Math.max(0, Math.min(index, branchViews.length - 1)); for (var b = 0; b < branchViews.length; b++) branchViews[b].hidden = b !== branchCurrent; if (branchPosition) branchPosition.textContent = "Branch " + (branchCurrent + 1) + "/" + branchViews.length; if (branchPrev) branchPrev.disabled = branchCurrent === 0; if (branchNext) branchNext.disabled = branchCurrent === branchViews.length - 1; onBranchChange(); }',
@@ -923,11 +1436,40 @@ const EXPORT_JS = [
   '})();',
 ].join('\n');
 
+const COPY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 3h9a2 2 0 0 1 2 2v12h-2V5H8V3Zm-3 4h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Zm0 2v10h9V9H5Z"/></svg>';
+const CHEVRON_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M7.4 9 12 13.6 16.6 9 18 10.4l-6 6-6-6L7.4 9Z"/></svg>';
+
+// The Copy chat button and its options. A choice is offered only for content this chat
+// has. Thinking and tool calls that the export left out are still listed, greyed out, so
+// it is clear why they cannot be copied.
+function renderCopyBar(messages, { provider, includeThinking, includeMessageModels, forked }) {
+  const blocks = messages.flatMap((message) => message.textBlocks ?? []);
+  const hasType = (...types) => blocks.some((block) => types.includes(block.type));
+  const options = [];
+  const option = (name, label, { checked = false, missing = '' } = {}) => {
+    const note = missing ? ` <span class="copy-opt-note">${escapeHtml(missing)}</span>` : '';
+    options.push(`<label${missing ? ' class="is-off"' : ''}><input type="checkbox" data-copy-opt="${name}"${checked && !missing ? ' checked' : ''}${missing ? ' disabled' : ''}><span>${escapeHtml(label)}${note}</span></label>`);
+  };
+  const leftOut = 'not in this export';
+  option('speakers', `Names (You, ${provider})`, { checked: true });
+  if (hasType('thinking')) option('thinking', 'Thinking', { missing: includeThinking ? '' : leftOut });
+  if (hasType('tool_use', 'tool_result')) option('tools', 'Tool calls and results', { missing: includeThinking ? '' : leftOut });
+  else if (messages.some((message) => message.role === 'tool')) option('tools', 'Tool messages');
+  if (messages.some((message) => formatTimestamp(message.createdAt))) option('times', 'Timestamps');
+  if (includeMessageModels && messages.some((message) => message.role === 'assistant')) option('models', 'Model names');
+  option('title', 'Chat title', { checked: true });
+  option('details', 'Export date, model and link');
+  if (hasType('image', 'omitted')) option('placeholders', 'Notes where images or other content were left out');
+  if (messages.some((message) => message.hidden)) option('hidden', `Messages hidden by ${provider}`);
+  const shownOnly = forked ? ' Only the versions shown on screen are copied.' : '';
+  return `<div class="copy-bar" id="copy-bar"><div class="copy-split"><button id="copy-chat" class="copy-main" type="button" title="Copy the whole chat as formatted text">${COPY_ICON}<span data-copy-label>Copy chat</span></button><button id="copy-options-toggle" class="copy-more" type="button" aria-expanded="false" aria-controls="copy-options" aria-label="Copy options" title="Choose what Copy chat includes">${CHEVRON_ICON}</button></div><span id="copy-status" class="copy-status" role="status" aria-live="polite"></span><div id="copy-options" class="copy-options" role="group" aria-labelledby="copy-options-title" hidden><p id="copy-options-title" class="copy-options-title">Copy chat includes</p>${options.join('')}<p class="copy-hint">Copies the text, without images. Headings, lists, tables and code keep their format in apps like Obsidian, Notion, Google Docs and Word.${shownOnly}</p></div></div>`;
+}
+
 function renderMessageArticle(message, id, messageIndex, includeMessageModels, railItems, branchLabel = '', includeThinking = false) {
   const timestamp = formatTimestamp(message.createdAt);
   const timestampValue = timestampIso(message.createdAt);
   const blocks = message.textBlocks.map((block) => renderBlock(block, includeMessageModels, includeThinking)).join('') || '<p class="empty-message">[empty message]</p>';
-  const copyButton = '<button class="copy-btn" type="button">Copy</button>';
+  const copyButton = '<button class="copy-btn" type="button" title="Copy this message as formatted text">Copy</button>';
   if (message.role === 'user') {
     railItems.push(`<li><a href="#${id}"><span>${escapeHtml(branchLabel + railLabel(messagePlainText(message)))}</span></a></li>`);
   }
@@ -1005,8 +1547,9 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
   const rawTitle = includeTitle ? conversation.title : `${provider} conversation`;
   const title = escapeHtml(rawTitle);
   const idMeta = includeConversationId && conversation.conversationId ? `<meta name="conversation-id" content="${escapeAttribute(conversation.conversationId)}">` : '';
-  const sourceBlock = sourceUrl ? `<p class="meta">Source: <a href="${escapeAttribute(sourceUrl)}" rel="noopener noreferrer">${escapeHtml(sourceUrl)}</a></p>` : '';
-  const metadata = `<p class="meta">Exported ${escapeHtml(exportedAt)} · ${renderedMessages.length} message${renderedMessages.length === 1 ? '' : 's'} (${escapeHtml(roleCounts(renderedMessages, provider))})</p>`;
+  const sourceBlock = sourceUrl ? `<p class="meta" data-copy-meta>Source: <a href="${escapeAttribute(sourceUrl)}" rel="noopener noreferrer">${escapeHtml(sourceUrl)}</a></p>` : '';
+  const metadata = `<p class="meta" data-copy-meta>Exported ${escapeHtml(exportedAt)} · ${renderedMessages.length} message${renderedMessages.length === 1 ? '' : 's'} (${escapeHtml(roleCounts(renderedMessages, provider))})</p>`;
+  const copyBar = renderCopyBar(renderedMessages, { provider, includeThinking, includeMessageModels, forked: useLocalTree || branchCount > 1 });
   const branchLine = availableBranchCount > 1 ? `<p class="meta">Branches: ${useLocalTree ? `${availableBranchCount} available; local fork controls shown` : branchCount > 1 ? `${branchCount} exported` : `1 of ${availableBranchCount} exported`}</p>` : '';
   const modelLine = formatModels(conversation);
   const statsLine = formatLocalStats(conversation.stats);
@@ -1058,6 +1601,7 @@ ${idMeta}
 <div class="wrap">
 <header class="export-head">
   <h1>${title}</h1>
+  ${copyBar}
   ${metadata}
   ${branchLine}
   ${modelLine}
@@ -1079,7 +1623,8 @@ ${messagesHtml}
 <footer class="export-footer">${escapeHtml(branchNote)} Generated locally by chatgpt-thread-archiver ${ARCHIVER_VERSION}. This file was generated locally and is designed to work offline.</footer>
 </main>
 </div>
-<script>${EXPORT_JS}</script>
+<script>${EXPORT_JS}
+${EXPORT_COPY_JS}</script>
 </body>
 </html>`;
 }

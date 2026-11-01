@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
-import { normalizeConversation, renderConversationHtml, sanitizeFilename, textToBlocks, ConversationShapeError, selectConversationBranch, messagesFromBranchTree, discoverImageModelMetadata, extractTextBlocks } from './src/core.mjs';
+import { copyMarkdownToHtml, normalizeConversation, renderConversationHtml, sanitizeFilename, textToBlocks, ConversationShapeError, selectConversationBranch, messagesFromBranchTree, discoverImageModelMetadata, extractTextBlocks } from './src/core.mjs';
 import { ChatGPTClientError, clearAccessTokenCache, describeClientError, endpointCandidates, getAuthContext, getConversationIdFromUrl, isExporterRoute, parseConversationRoute } from './src/chatgpt-client.mjs';
 import { applyImageBudget, candidateDownloadUrl, IMAGE_LIMITS, resolveClaudeConversationImages, resolveConversationImages, retryDelayMs, summarizeImageStats } from './src/assets.mjs';
 import { deriveExportStats } from './src/export-stats.mjs';
@@ -44,11 +44,13 @@ assert.match(simpleHtml, /chatgpt-thread-archiver-theme/);
 assert.match(simpleHtml, /html\.dark/);
 assert.match(simpleHtml, /classList\.toggle\("dark"/);
 assert.match(simpleHtml, /class="copy-btn"/);
-assert.match(simpleHtml, /querySelector\("\.content"\)/);
+assert.match(simpleHtml, /querySelector\('\.content'\)/);
+assert.match(simpleHtml, /id="copy-bar"/);
+assert.match(simpleHtml, /id="copy-chat"/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.16\.5"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.5/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.17\.0"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.17\.0/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -225,7 +227,7 @@ assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.16\.5/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.17\.0/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -1239,7 +1241,7 @@ assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.16\.5/);
+assert.match(buildSource, /@version      0\.17\.0/);
 // The script runs on the whole host so a chat started on the home page gets the button
 // without a reload; the route check decides where the button shows.
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/*\n'));
@@ -1253,6 +1255,117 @@ assert.match(buildSource, /\$\{claude\}/);
 assert.match(buildSource, /\$\{assets\}/);
 assert.match(buildSource, /\$\{stats\}/);
 assert.match(statsSource, /Counted from exported text only|wordCount/);
+
+// v0.17.0 — Copy chat. The clipboard gets the chat's Markdown and HTML built from it.
+{
+  const html = copyMarkdownToHtml([
+    '## Plan',
+    'Steps:',
+    '1. Install **Node** with `nvm`',
+    '2. Build',
+    '   - check `dist/`',
+    '3. Ship',
+    '',
+    '- [ ] todo',
+    '- [x] done',
+    '',
+    '| Name | Value |',
+    '|:--|--:|',
+    '| a \\| b | `1` |',
+    '',
+    '> quoted *text*',
+    '',
+    '```js',
+    'const x = "<b>";',
+    '```',
+    '',
+    '---',
+    'MAX_RETRY_COUNT and 2*3*4 stay literal; #tag is not a heading.',
+    'Links: [docs](https://example.com/a_b), https://x.org/w_(1). and [bad](javascript:alert(1)) <script>alert(1)</script>',
+    'Image: ![a chart](https://example.com/c.png) and `code \\* kept` and \\*escaped\\*',
+  ].join('\n'));
+  assert.match(html, /^<h2>Plan<\/h2><p>Steps:<\/p><ol><li>Install <strong>Node<\/strong> with <code>nvm<\/code><\/li><li>Build<ul><li>check <code>dist\/<\/code><\/li><\/ul><\/li><li>Ship<\/li><\/ol>/);
+  assert.match(html, /<ul><li><input type="checkbox" disabled> todo<\/li><li><input type="checkbox" disabled checked> done<\/li><\/ul>/);
+  assert.match(html, /<table><thead><tr><th style="text-align:left">Name<\/th><th style="text-align:right">Value<\/th><\/tr><\/thead><tbody><tr><td style="text-align:left">a \| b<\/td><td style="text-align:right"><code>1<\/code><\/td><\/tr><\/tbody><\/table>/);
+  assert.match(html, /<blockquote><p>quoted <em>text<\/em><\/p><\/blockquote>/);
+  assert.match(html, /<pre><code class="language-js">const x = &quot;&lt;b&gt;&quot;;<\/code><\/pre><hr>/);
+  assert.match(html, /MAX_RETRY_COUNT and 2\*3\*4 stay literal; #tag is not a heading\./);
+  assert.match(html, /<a href="https:\/\/example\.com\/a_b">docs<\/a>/);
+  assert.match(html, /<a href="https:\/\/x\.org\/w_\(1\)">https:\/\/x\.org\/w_\(1\)<\/a>\./);
+  // Only http(s) and mailto links become links; nothing in a chat becomes live HTML.
+  assert.doesNotMatch(html, /javascript:/);
+  assert.doesNotMatch(html, /<script/);
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  // The copy is text: an image keeps only its description.
+  assert.match(html, /Image: a chart and <code>code \\\* kept<\/code> and \*escaped\*/);
+  assert.doesNotMatch(html, /<img/);
+  assert.equal(copyMarkdownToHtml('# A\n\npara one\nline two'), '<h1>A</h1><p>para one<br>line two</p>');
+  assert.equal(copyMarkdownToHtml('3. three\n4. four'), '<ol start="3"><li>three</li><li>four</li></ol>');
+  assert.equal(copyMarkdownToHtml('- a\n\n- b'), '<ul><li><p>a</p></li><li><p>b</p></li></ul>');
+  assert.equal(copyMarkdownToHtml('[`x`](https://e.com)'), '<p><a href="https://e.com"><code>x</code></a></p>');
+  assert.equal(copyMarkdownToHtml('0 safe'), '<p>0 safe</p>');
+
+  const page = renderConversationHtml(simple, { exportedAt: '2026-11-01T00:00:00.000Z', sourceUrl: 'https://chatgpt.com/c/example' });
+  assert.match(page, /<button id="copy-chat" class="copy-main" type="button"[^>]*>.*<span data-copy-label>Copy chat<\/span><\/button>/);
+  assert.match(page, /id="copy-options-toggle"[^>]*aria-expanded="false" aria-controls="copy-options" aria-label="Copy options"/);
+  assert.match(page, /id="copy-status" class="copy-status" role="status" aria-live="polite"/);
+  assert.match(page, /id="copy-options" class="copy-options" role="group" aria-labelledby="copy-options-title" hidden>/);
+  assert.match(page, /data-copy-opt="speakers" checked><span>Names \(You, ChatGPT\)/);
+  assert.match(page, /data-copy-opt="title" checked>/);
+  assert.match(page, /data-copy-opt="details">/);
+  // No thinking, tools, images or hidden messages in this chat, so no such choices.
+  for (const option of ['thinking', 'tools', 'placeholders', 'hidden']) assert.doesNotMatch(page, new RegExp(`data-copy-opt="${option}"`));
+  assert.doesNotMatch(page, /versions shown on screen/);
+  assert.equal((page.match(/data-copy-meta/g) ?? []).length >= 3, true);
+  assert.match(page, /<p class="meta" data-copy-meta>Source: /);
+  // Hidden without JavaScript, like the rail toggle: it cannot work without it.
+  assert.match(page, /\.copy-bar \{ display: none;/);
+  assert.match(page, /html\.js \.copy-bar \{ display: flex; \}/);
+  const script = page.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? '';
+  assert.doesNotThrow(() => new Script(script));
+  assert.equal((page.match(/<script>/g) ?? []).length, 1);
+  assert.doesNotMatch(script, /<\/script|<!--/i);
+  assert.match(script, /chatgpt-thread-archiver-copy-options/);
+  assert.match(script, /setData\('text\/plain', markdown\)/);
+  assert.match(script, /setData\('text\/html', html\)/);
+  assert.match(script, /new ClipboardItem/);
+  assert.match(script, /navigator\.clipboard\.writeText\(markdown\)/);
+  assert.match(script, /closest\('\[hidden\]'\)/);
+  // The old per-message copy (innerText, plain text only) is gone.
+  assert.doesNotMatch(script, /innerText/);
+  // The copy script carries no chat text: it reads the page.
+  assert.doesNotMatch(script, /A small test chat/);
+
+  // Thinking and tools: offered when in the file, greyed out when the export left them out.
+  const withThinking = renderConversationHtml(claudeReasoning, { exportedAt: '2026-11-01T00:00:00.000Z', includeThinking: true });
+  assert.match(withThinking, /data-copy-opt="thinking"><span>Thinking<\/span>/);
+  assert.match(withThinking, /data-copy-opt="tools"><span>Tool calls and results<\/span>/);
+  assert.match(withThinking, /Names \(You, Claude\)/);
+  const withoutThinking = renderConversationHtml(claudeReasoning, { exportedAt: '2026-11-01T00:00:00.000Z' });
+  assert.match(withoutThinking, /<label class="is-off"><input type="checkbox" data-copy-opt="thinking" disabled><span>Thinking <span class="copy-opt-note">not in this export<\/span>/);
+  assert.match(withoutThinking, /<label class="is-off"><input type="checkbox" data-copy-opt="tools" disabled>/);
+  const imagePage = renderConversationHtml(imageConversation, { exportedAt: '2026-11-01T00:00:00.000Z' });
+  assert.match(imagePage, /data-copy-opt="placeholders">/);
+}
+
+// v0.17.0 — Quick export sits beside the menu button and skips the menu.
+assert.match(uiSource, /const QUICK_LABEL = 'Quick export';/);
+assert.match(uiSource, /const MENU_LABEL = 'Export HTML…';/);
+assert.match(uiSource, /controlButton\('quick', QUICK_LABEL/);
+assert.match(uiSource, /controlButton\('menu', MENU_LABEL/);
+assert.match(uiSource, /quick\.addEventListener\('click', \(\) => quickExport\(control, provider\)\);/);
+assert.match(uiSource, /menu\.addEventListener\('click', \(\) => showExportOptions\(control, provider\)\);/);
+assert.match(uiSource, /control\.setAttribute\('role', 'group'\);/);
+// It uses the saved choices, or the menu's defaults before any are saved, and says which.
+assert.match(uiSource, /function hasSavedPrefs\(\)/);
+assert.match(uiSource, /const prefs = loadPrefs\(\);\n    exportCurrentConversation\(control, prefs, provider, \{/);
+assert.match(uiSource, /settingsNote: `Quick export, \$\{saved \? 'your last settings' : 'default settings'\}: \$\{describePrefs\(prefs, provider\)\}\.`/);
+assert.match(uiSource, /function describePrefs\(prefs, provider\)/);
+assert.match(uiSource, /Your choices are saved, and Quick export reuses them\./);
+// A busy export blocks both buttons without taking focus away from them.
+assert.match(uiSource, /button\.setAttribute\('aria-disabled', busy \? 'true' : 'false'\);/);
+assert.match(uiSource, /if \(control\?\.dataset\.state === 'busy'\) return;/);
+assert.doesNotMatch(uiSource, /button\.disabled = busy/);
 
 assert.throws(() => normalizeConversation({ title: 'No messages' }), ConversationShapeError);
 

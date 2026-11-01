@@ -102,6 +102,14 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Model fallback label (v0.16.4) | Only if Claude notes that it answered with a different model than the one picked: export that chat | That reply shows the model that answered, and the header lists it under `Models used` |
 | Rail reaches every prompt (v0.16.5) | Open a long export, made with **All branches** if the chat has versions; click the last few ticks, then a faint tick | Each click scrolls to its prompt and lights that tick; a faint tick first switches to its version |
 | Rail buttons (v0.16.5) | Click ▼ and ▲ beside the ticks | They move one prompt down or up; ▲ is grey at the first prompt and ▼ at the last |
+| Quick export, first time (v0.17.0) | On a browser that has never exported, hover **Quick export**, then click it | The tooltip names the default settings; the file downloads with no menu; the message names the settings it used |
+| Quick export reuses the menu (v0.17.0) | Export once from **Export HTML…** with **Export current branch only** and no title, then click **Quick export** on another chat | No menu; the file has one branch and no title; the tooltip and message say "your last settings" |
+| Quick export with Choose images (v0.17.0) | Save **Choose images after loading** in the menu, then use **Quick export** on a chat with images | The image list opens; nothing else is asked |
+| Copy chat into Obsidian (v0.17.0) | In an export of a chat with headings, a list and a table, click **Copy chat** and paste into an Obsidian note; then paste again with Ctrl/Cmd+Shift+V | Both pastes show the title, names, headings, nested lists, the table and code blocks as Markdown; no images |
+| Copy chat into a rich-text app (v0.17.0) | Paste the same copy into Google Docs or Word | Real headings, lists, a table and code |
+| Copy chat options (v0.17.0) | Open the arrow beside **Copy chat**, tick **Thinking** and **Tool calls and results** in a Claude export made with thinking included, copy and paste | Thinking appears as a quote with its summary lines, tool calls with their input and results as code blocks; in an export without thinking both choices are greyed out |
+| Copy follows the shown version (v0.17.0) | In an **All branches** export, switch a ‹ 1/2 › control and click **Copy chat** | The copy has the version on screen, not the other one |
+| Message Copy button (v0.17.0) | Click **Copy** on a reply with a code block and paste into Obsidian | The code block stays a fenced code block |
 
 ## Failure report template
 

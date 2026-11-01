@@ -413,3 +413,21 @@ Ctrl/Cmd+Shift+V pastes plain text.
 
 **Open:** Live acceptance of v0.17.0: Quick export on both sites; paste into Obsidian (both
 paste modes) and a rich-text app.
+
+## 2026-11-01 — v0.17.0 confirmed live; status report 002
+
+**Did:** PR #40 merged into `main` as `20f8bcd`. The owner reports Quick export and Copy
+chat both work on the live sites; which paste targets were tried was not recorded.
+Restarted `claude/awesome-knuth-orvgiq` from `main`, recorded the merge commit and the live
+result in `docs/version-history/v0.17.0.md`, and generated report
+SR-chatgpt-thread-archiver-002. Build and checks pass.
+
+**Decided:** Nothing new.
+
+**Learned:** Several version records (v0.13.0–v0.15.0, v0.16.1, v0.16.5) still say live
+acceptance is outstanding, though the log shows some were tested live. SR-001's questions
+about the `Image model:` caption and the two root Markdown files were never answered.
+
+**Open:** The owner picks the next feature. Still open: the `Image model:` caption decision
+and the `diagnostics/` clean-up it blocks; the parked Claude 404; Claude PDFs and text
+attachments.

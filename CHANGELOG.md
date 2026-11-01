@@ -2,6 +2,27 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.17.0] — 2026-11-01
+
+### Added
+
+**Quick export.** A second button beside the export button skips the menu and exports straight away with the choices you last made there. Before your first export from the menu, it uses the menu's defaults. Its tooltip, and the message shown after the download, name the settings it used, for example `Current version only · all images · link`. If your saved choice is **Choose images**, the image list still opens, because that choice is made per chat. The menu button now reads **Export HTML…**; the dots mean it opens a menu.
+
+**Copy chat in the exported file.** A **Copy chat** button at the top of the file copies the whole chat as formatted text, without images. The clipboard gets the chat's Markdown as plain text and the same chat as HTML, so headings, lists, tables, quotes and code keep their format in Obsidian, Notion, Google Docs or Word. Obsidian turns the HTML back into Markdown by default and pastes the plain Markdown with Ctrl/Cmd+Shift+V. The arrow beside the button chooses what the copy includes:
+
+- names (on by default) and the chat title (on by default);
+- thinking, and tool calls with their results, when the export includes them. When the export left them out, they are listed greyed out with "not in this export";
+- timestamps, model names, and the export date, model and link;
+- notes where images or other content were left out, and messages hidden by the provider, when the chat has them.
+
+The choices are remembered in your browser, like the theme. In a chat with several versions, only the versions shown on screen are copied.
+
+### Changed
+
+**Each message's Copy button uses the same format.** It used to copy the message as plain text, losing code blocks and bold. It now copies Markdown and HTML, with thinking and tool calls following the Copy chat choices.
+
+**Copy buttons have darker green in light mode** so their white text is easier to read.
+
 ## [0.16.5] — 2026-10-30
 
 ### Fixed

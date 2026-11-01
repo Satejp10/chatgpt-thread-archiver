@@ -382,3 +382,34 @@ confirms what the missing picker means.
 **Open:** To test it: in DevTools, Network, on the failing chat, check whether
 `/v1/code/sessions/<cse_id>` (or a request under it) returns the messages, and which ID it is
 keyed on. If so, add a session reader as a third fallback after `ReadConversation`.
+
+## 2026-11-01 — v0.17.0: Quick export and Copy chat
+
+**Did:** Owner asked for two features. (1) A **Quick export** button beside the export
+button that skips the menu and uses the last settings. (2) A copy button in the exported
+HTML that copies the whole chat as formatted text that keeps its structure in apps like
+Obsidian, without images, with options for thinking, tool calls and other content. Built
+both as v0.17.0 on `claude/awesome-knuth-orvgiq`, checked in Chromium with Playwright.
+
+**Decided:** Quick export with nothing saved uses the menu's defaults and says so, rather
+than opening the menu — a "quick" button that opens a menu would surprise. A saved
+**Choose images** still opens the image list: it is a per-chat choice, and silently
+embedding every image would override it. The menu button became **Export HTML…** (dots =
+opens a menu) and keeps its place at the right edge. Rejected: a dropdown-arrow split
+button, which would have hidden the existing menu behind the arrow.
+
+**Decided:** The copy puts Markdown in `text/plain` and HTML built from it in
+`text/html`. Rejected: HTML only (Obsidian's plain paste would get unstructured text) and
+Markdown only (Google Docs and Word would show raw `##` and pipes). The Markdown is rebuilt
+from the page, not embedded at export time, so files do not grow. Copy follows the
+versions on screen. Speaker names are bold lines with `---` between messages, not
+headings, so a reply's own headings keep their levels.
+
+**Learned:** The exported page never rendered Markdown headings, lists or tables; it shows
+them as text with `<br>`. That is why rebuilding the Markdown from the page is exact, and
+why the copy needed its own Markdown-to-HTML converter. Obsidian's "Auto convert HTML" is
+on by default per a community settings reference and forum posts (no official page found);
+Ctrl/Cmd+Shift+V pastes plain text.
+
+**Open:** Live acceptance of v0.17.0: Quick export on both sites; paste into Obsidian (both
+paste modes) and a rich-text app.

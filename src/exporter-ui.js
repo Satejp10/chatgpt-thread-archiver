@@ -7,14 +7,24 @@
   const LEGACY_PREF_KEY = 'chatgpt-chats-exporter-prefs';
   const PREFS_VERSION = 1;
 
+  const QUICK_LABEL = 'Quick export';
+  const MENU_LABEL = 'Export HTML…';
+
   const STYLES = `
-    #${CONTROL_ID} { position: fixed; right: 18px; bottom: 18px; z-index: 2147483647; border: 0; border-radius: 999px; padding: 10px 15px; background: #111827; color: white; box-shadow: 0 6px 22px rgb(0 0 0 / .2); font: 600 13px/1.2 system-ui, sans-serif; cursor: pointer; }
-    #${CONTROL_ID}:hover { background: #1f2937; }
+    #${CONTROL_ID} { position: fixed; right: 18px; bottom: 18px; z-index: 2147483647; display: flex; align-items: stretch; border-radius: 999px; background: #111827; box-shadow: 0 6px 22px rgb(0 0 0 / .2); overflow: hidden; }
+    #${CONTROL_ID} button { display: inline-flex; align-items: center; gap: 6px; margin: 0; border: 0; padding: 10px 14px; background: transparent; color: white; font: 600 13px/1.2 system-ui, sans-serif; cursor: pointer; white-space: nowrap; }
+    #${CONTROL_ID} button:first-child { padding-left: 15px; }
+    #${CONTROL_ID} button:last-child { padding-right: 15px; }
+    #${CONTROL_ID} button + button { border-left: 1px solid rgb(255 255 255 / .22); }
+    #${CONTROL_ID} button:hover:not([aria-disabled="true"]) { background: #1f2937; }
+    #${CONTROL_ID} button:focus-visible { outline: 2px solid #93c5fd; outline-offset: -3px; border-radius: 999px; }
+    #${CONTROL_ID} svg { flex: none; }
     @media (max-width: 700px) {
       #${CONTROL_ID} { right: 12px; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
       #${PANEL_ID} { right: 12px; bottom: calc(138px + env(safe-area-inset-bottom, 0px)); max-width: calc(100vw - 24px); }
     }
-    #${CONTROL_ID}[data-state="busy"] { opacity: .7; cursor: wait; }
+    #${CONTROL_ID}[data-state="busy"] { opacity: .7; }
+    #${CONTROL_ID}[data-state="busy"] button { cursor: wait; }
     #${PANEL_ID} { position: fixed; right: 18px; bottom: 64px; z-index: 2147483647; max-width: min(420px, calc(100vw - 36px)); max-height: 60vh; overflow: auto; border: 1px solid rgb(156 163 175 / .45); border-radius: 12px; padding: 12px 14px; background: Canvas; color: CanvasText; box-shadow: 0 8px 30px rgb(0 0 0 / .2); font: 13px/1.45 system-ui, sans-serif; white-space: normal; overflow-wrap: anywhere; }
     #${PANEL_ID}[hidden] { display: none; }
     #${PANEL_ID} strong { display: block; margin-bottom: 3px; }
@@ -165,6 +175,30 @@
       // Defaults remain active when storage is unavailable or malformed.
     }
     return prefs;
+  }
+
+  // Quick export uses the saved choices. Before the first export from the menu there are
+  // none, so it uses the defaults the menu would show, and says so.
+  function hasSavedPrefs() {
+    try {
+      return Boolean(parsePrefs(localStorage.getItem(PREF_KEY)) ?? parsePrefs(localStorage.getItem(LEGACY_PREF_KEY)));
+    } catch {
+      return false;
+    }
+  }
+
+  // A short, plain summary of what an export will contain, for Quick export's tooltip and
+  // status line: "All versions · all images · title and link · no thinking".
+  function describePrefs(prefs, provider) {
+    const parts = [
+      prefs.branchMode === 'all' ? 'all versions' : 'current version only',
+      { all: 'all images', none: 'no images', choose: 'choose images' }[prefs.imageMode] ?? 'all images',
+    ];
+    const fields = [prefs.title && 'title', prefs.url && 'link', prefs.conversationId && 'ID'].filter(Boolean);
+    parts.push(fields.length ? fields.join(fields.length === 2 ? ' and ' : ', ') : 'no title or link');
+    if (provider === 'Claude') parts.push(prefs.thinking === true ? 'with thinking' : 'no thinking');
+    const text = parts.join(' · ');
+    return text.charAt(0).toUpperCase() + text.slice(1);
   }
 
   function savePrefs(prefs) {
@@ -348,8 +382,8 @@
     });
   }
 
-  function showExportOptions(button, provider) {
-    if (uiElement(OPTIONS_ID)) return;
+  function showExportOptions(control, provider) {
+    if (uiElement(OPTIONS_ID) || control?.dataset.state === 'busy') return;
     const prefs = loadPrefs();
     const overlay = document.createElement('div');
     overlay.id = OPTIONS_ID;
@@ -360,7 +394,7 @@
     const heading = document.createElement('h2');
     heading.textContent = `Export ${provider} conversation`;
     const intro = document.createElement('p');
-    intro.textContent = 'Choose which identifying fields and images should be included in the offline HTML file.';
+    intro.textContent = 'Choose which identifying fields and images should be included in the offline HTML file. Your choices are saved, and Quick export reuses them.';
     const url = checkbox('cge-pref-url', 'Include the conversation URL', prefs.url);
     const title = checkbox('cge-pref-title', 'Include the conversation title and use it in the filename', prefs.title);
     const conversationId = checkbox('cge-pref-conversation-id', 'Include the conversation ID in the HTML metadata', prefs.conversationId);
@@ -416,9 +450,27 @@
       };
       savePrefs(chosen);
       close();
-      exportCurrentConversation(button, chosen, provider);
+      exportCurrentConversation(control, chosen, provider, { trigger: control?.querySelector('[data-action="menu"]') });
     });
     exportButton.focus();
+  }
+
+  // Skips the menu: the saved choices, or the menu's defaults before anything is saved.
+  // "Choose images" still opens the image list, because that choice is made per chat.
+  function quickExport(control, provider) {
+    if (control?.dataset.state === 'busy') return;
+    uiElement(OPTIONS_ID)?.remove();
+    const saved = hasSavedPrefs();
+    const prefs = loadPrefs();
+    exportCurrentConversation(control, prefs, provider, {
+      trigger: control?.querySelector('[data-action="quick"]'),
+      settingsNote: `Quick export, ${saved ? 'your last settings' : 'default settings'}: ${describePrefs(prefs, provider)}.`,
+    });
+  }
+
+  function quickExportTitle(provider) {
+    const saved = hasSavedPrefs();
+    return `Export now, without the menu, using ${saved ? 'your last settings' : 'the default settings until you export from the menu once'}: ${describePrefs(loadPrefs(), provider)}`;
   }
 
   function filenameFor(conversation, prefs, exportedAt) {
@@ -474,21 +526,31 @@
     };
   }
 
-  async function exportCurrentConversation(button, prefs = loadPrefs(), provider = providerForLocation()) {
-    if (button?.dataset.state === 'busy') return;
+  // Both buttons ignore clicks while an export runs, and the one that started it says so.
+  // aria-disabled rather than disabled, so a keyboard user's focus stays on the button.
+  function setControlBusy(control, trigger, busy) {
+    if (!control) return;
+    control.dataset.state = busy ? 'busy' : 'idle';
+    control.setAttribute('aria-busy', busy ? 'true' : 'false');
+    for (const button of control.querySelectorAll('button')) {
+      button.setAttribute('aria-disabled', busy ? 'true' : 'false');
+      const label = button.querySelector('[data-label]');
+      if (label) label.textContent = busy && button === trigger ? 'Exporting…' : button.dataset.idleLabel;
+    }
+  }
+
+  async function exportCurrentConversation(control, prefs = loadPrefs(), provider = providerForLocation(), { trigger = null, settingsNote = '' } = {}) {
+    if (control?.dataset.state === 'busy') return;
     if (!provider) {
       showStatus('Export unavailable', 'Open a supported ChatGPT or Claude conversation first.', true);
       return;
     }
-    if (button) {
-      button.dataset.state = 'busy';
-      button.textContent = 'Exporting…';
-    }
+    setControlBusy(control, trigger, true);
 
     try {
       const conversationId = provider === 'Claude' ? getClaudeConversationIdFromUrl() : getConversationIdFromUrl();
       if (!conversationId) throw new Error(`Open a ${provider} conversation before exporting.`);
-      showStatus('Loading conversation…', `${provider} conversation ID: ${provider === 'Claude' ? redactClaudeId(conversationId) : redactId(conversationId)}`);
+      showStatus('Loading conversation…', [settingsNote, `${provider} conversation ID: ${provider === 'Claude' ? redactClaudeId(conversationId) : redactId(conversationId)}`].filter(Boolean).join('\n'));
       const raw = provider === 'Claude' ? await fetchClaudeConversation(conversationId) : await fetchConversation(conversationId);
       showStatus('Formatting messages…');
       const normalized = provider === 'Claude' ? normalizeClaudeConversation(raw, conversationId) : normalizeConversation(raw);
@@ -536,17 +598,44 @@
         ? ` ${exportStats.imageEmbeddedCount} image(s) embedded; ${exportStats.imageUnavailableCount} unavailable${exportStats.imageBudgetLimitedCount ? `; ${exportStats.imageBudgetLimitedCount} limited by export budget` : ''}.`
         : '';
       const localStats = `${exportStats.wordCount.toLocaleString('en-US')} words and ${exportStats.characterCount.toLocaleString('en-US')} characters counted locally.`;
-      showStatus('Download ready', `${exportStats.messageCount} ${provider} message(s) exported; ${exportStats.omittedBlockCount} unsupported block(s) marked.${imageSummary} ${localStats}`);
+      const settingsLine = settingsNote ? `\n${settingsNote} Change them with ${MENU_LABEL}` : '';
+      showStatus('Download ready', `${exportStats.messageCount} ${provider} message(s) exported; ${exportStats.omittedBlockCount} unsupported block(s) marked.${imageSummary} ${localStats}${settingsLine}`);
     } catch (error) {
       const description = provider === 'Claude' ? describeClaudeError(error) : describeClientError(error);
       showStatus('Export failed', description, true);
       console.error('[ChatGPT Thread Archiver]', error?.code ?? 'unknown', description);
     } finally {
-      if (button) {
-        button.dataset.state = 'idle';
-        button.textContent = 'Export HTML';
-      }
+      setControlBusy(control, trigger, false);
     }
+  }
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  function icon(pathData) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '14');
+    svg.setAttribute('height', '14');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', pathData);
+    path.setAttribute('fill', 'currentColor');
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function controlButton(action, text, title, iconPath = '') {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.action = action;
+    button.dataset.idleLabel = text;
+    button.title = title;
+    if (iconPath) button.appendChild(icon(iconPath));
+    const label = document.createElement('span');
+    label.dataset.label = '';
+    label.textContent = text;
+    button.appendChild(label);
+    return button;
   }
 
   function install() {
@@ -560,14 +649,26 @@
     if (existing?.dataset.provider === provider) return;
     existing?.remove();
     if (provider === 'ChatGPT') installAuthCacheInvalidation();
-    const button = document.createElement('button');
-    button.id = CONTROL_ID;
-    button.dataset.provider = provider;
-    button.type = 'button';
-    button.textContent = 'Export HTML';
-    button.title = `Export the currently open ${provider} conversation as HTML`;
-    button.addEventListener('click', () => showExportOptions(button, provider));
-    uiRoot().appendChild(button);
+    // Two buttons in one pill. "Export HTML…" stays at the right edge where it always was
+    // and opens the menu; "Quick export" skips it and reuses the last choices.
+    const control = document.createElement('div');
+    control.id = CONTROL_ID;
+    control.dataset.provider = provider;
+    control.dataset.state = 'idle';
+    control.setAttribute('role', 'group');
+    control.setAttribute('aria-label', `Export this ${provider} conversation`);
+    // A lightning bolt for the shortcut; the menu button keeps its plain label.
+    const quick = controlButton('quick', QUICK_LABEL, quickExportTitle(provider), 'M13 2 4 14h7l-1 8 9-12h-7l1-8z');
+    const menu = controlButton('menu', MENU_LABEL, `Choose what to include, then export the currently open ${provider} conversation as HTML`);
+    // The tooltip names the settings, so it is refreshed whenever the pointer or focus
+    // arrives: an export from the menu may have changed them since the button was made.
+    const refreshQuickTitle = () => { quick.title = quickExportTitle(provider); };
+    quick.addEventListener('pointerenter', refreshQuickTitle);
+    quick.addEventListener('focus', refreshQuickTitle);
+    quick.addEventListener('click', () => quickExport(control, provider));
+    menu.addEventListener('click', () => showExportOptions(control, provider));
+    control.append(quick, menu);
+    uiRoot().appendChild(control);
   }
 
   function boot() {

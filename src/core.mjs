@@ -1,4 +1,4 @@
-const ARCHIVER_VERSION = '0.18.0';
+const ARCHIVER_VERSION = '0.19.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -740,6 +740,71 @@ function formatLocalStats(stats) {
   return `<p class="meta">Safe local stats: ${words} words · ${characters} characters${blocks}${tokens}. Counted from exported text only; provider token and context-window usage are not included.</p>`;
 }
 
+// Context gauge (v0.19.0). `stats.context` is the local estimate from
+// src/context-estimate.mjs; the page shows it as a share of a window size the reader picks.
+// The file is written for 1M, so it reads correctly with scripts off; the page script
+// redraws it for another size and remembers the choice in this browser, like the theme.
+export const CONTEXT_WINDOW_SIZES = [32000, 128000, 200000, 256000, 400000, 500000, 1000000];
+export const DEFAULT_CONTEXT_WINDOW = 1000000;
+
+// 2237 → "2.24K", 22345 → "22.3K", 1000000 → "1M": three significant figures at most.
+export function formatCompactTokens(count) {
+  const value = Math.max(0, Math.round(Number(count) || 0));
+  if (value < 1000) return String(value);
+  const [unit, size] = value < 999500 ? ['K', 1e3] : ['M', 1e6];
+  const scaled = value / size;
+  return `${Number(scaled.toFixed(scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2))}${unit}`;
+}
+
+// Also runs inside the exported page (see EXPORT_CONTEXT_JS), so it is plain ES5.
+export function formatContextShare(tokens, windowSize) {
+  var share = windowSize > 0 ? (Number(tokens) || 0) / windowSize * 100 : 0;
+  if (!(share > 0)) return '0%';
+  if (share < 0.1) return '<0.1%';
+  if (share < 9.95) return share.toFixed(1) + '%';
+  return Math.round(share) + '%';
+}
+
+function formatSeconds(seconds) {
+  const whole = Math.round(seconds);
+  return whole < 60 ? `${whole}s` : `${Math.floor(whole / 60)}m ${whole % 60}s`;
+}
+
+// The gauge's tooltip: what the estimate added up, and what it could not see.
+function contextBreakdown(context, provider, branchCount) {
+  const about = (count) => `about ${formatTokenEstimate(count)}`;
+  const lines = [`Local estimate, not ${provider}’s own figure.`];
+  if (provider === 'Claude') {
+    lines.push(`Messages: ${about(context.messages)} (counted locally, × ${context.textFactor} for Claude’s tokenizer)`);
+    if (context.thinkingSteps > 0) {
+      const untimed = context.untimedThinkingSteps > 0 ? `; ${context.untimedThinkingSteps} step${context.untimedThinkingSteps === 1 ? '' : 's'} without a time not counted` : '';
+      lines.push(`Thinking: ${about(context.thinking)} (${formatSeconds(context.thinkingSeconds)} at about ${context.thinkingTokensPerSecond} tokens a second${untimed})`);
+    }
+    if (context.tools > 0) lines.push(`Tool calls and results: ${about(context.tools)}`);
+    if (context.imageCount > 0) {
+      const unsized = context.unsizedImageCount > 0 ? `; ${context.unsizedImageCount} without a known size not counted` : '';
+      lines.push(`Images: ${about(context.images)} (${context.imageCount} image${context.imageCount === 1 ? '' : 's'}${unsized})`);
+    }
+    lines.push(`Claude’s published instructions: ${about(context.instructions)}`);
+    lines.push('Not counted: tool descriptions, memory, preferences, project knowledge and attached files. In long chats Claude may summarize earlier messages and hold less.');
+  } else {
+    lines.push(`Messages: ${about(context.messages)} (the exported text, counted locally)`);
+    lines.push(`Not counted: ${provider}’s system instructions, memory, hidden reasoning, images and uploaded files.`);
+  }
+  if (branchCount > 1) lines.push('Counted on the chat’s current branch only.');
+  return lines.join('\n');
+}
+
+function renderContextGauge(context, provider, branchCount) {
+  const total = Number(context?.total);
+  if (!Number.isFinite(total) || total < 0) return '';
+  const tokens = Math.round(total);
+  const share = (tokens / DEFAULT_CONTEXT_WINDOW) * 100;
+  const level = share >= 100 ? ' ctx-over' : share >= 80 ? ' ctx-high' : '';
+  const options = CONTEXT_WINDOW_SIZES.map((size) => `<option value="${size}"${size === DEFAULT_CONTEXT_WINDOW ? ' selected' : ''}>${formatCompactTokens(size)}</option>`).join('');
+  return `<div class="context-gauge${level}" id="context-gauge" data-context-tokens="${tokens}" title="${escapeAttribute(contextBreakdown(context, provider, branchCount))}"><div class="ctx-top"><span class="ctx-label">Context used</span><span class="ctx-share" data-ctx-share>${formatContextShare(tokens, DEFAULT_CONTEXT_WINDOW)}</span></div><div class="ctx-bar" aria-hidden="true"><span class="ctx-fill" data-ctx-fill style="width: ${Math.min(100, share).toFixed(2)}%"></span></div><div class="ctx-sub"><span>≈${formatCompactTokens(tokens)} of <span class="ctx-static">${formatCompactTokens(DEFAULT_CONTEXT_WINDOW)}</span><select class="ctx-window" aria-label="Context window size">${options}</select> tokens</span><span class="ctx-note">local estimate</span></div></div>`;
+}
+
 function safeModelLabel(value) {
   const model = String(value ?? '').trim();
   return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(model) ? model : null;
@@ -1280,6 +1345,37 @@ function exportCopyRuntime(markdownToHtml) {
 
 const EXPORT_COPY_JS = `(${exportCopyRuntime.toString()})(${copyMarkdownToHtml.toString()});`;
 
+// The context gauge's window picker. The count is in the gauge's data attribute; this
+// redraws the share for the window picked and keeps that choice in this browser.
+function exportContextRuntime(formatShare) {
+  var STORE = 'chatgpt-thread-archiver-context-window';
+  var gauge = document.getElementById('context-gauge');
+  var select = gauge && gauge.querySelector('select');
+  var share = gauge && gauge.querySelector('[data-ctx-share]');
+  var fill = gauge && gauge.querySelector('[data-ctx-fill]');
+  if (!select || !share || !fill) return;
+  var tokens = Number(gauge.getAttribute('data-context-tokens')) || 0;
+  function paint() {
+    var size = Number(select.value) || 1000000;
+    var percent = tokens / size * 100;
+    share.textContent = formatShare(tokens, size);
+    fill.style.width = Math.min(100, percent).toFixed(2) + '%';
+    gauge.classList.toggle('ctx-high', percent >= 80 && percent < 100);
+    gauge.classList.toggle('ctx-over', percent >= 100);
+  }
+  try {
+    var saved = localStorage.getItem(STORE);
+    for (var i = 0; i < select.options.length; i++) if (select.options[i].value === saved) select.selectedIndex = i;
+  } catch (error) {}
+  select.addEventListener('change', function () {
+    try { localStorage.setItem(STORE, select.value); } catch (error) {}
+    paint();
+  });
+  paint();
+}
+
+const EXPORT_CONTEXT_JS = `(${exportContextRuntime.toString()})(${formatContextShare.toString()});`;
+
 const EXPORT_CSS = `
 :root { color-scheme: light; --bg: #f9f9f9; --surface: #fff; --text: #24292f; --muted: #57606a; --border: #e0e0e0; --user: #eef2ff; --assistant: #fff; --accent: #10a37f; --link: #0969da; --code-bg: #1f2328; --code-text: #e6edf3; --shadow: rgb(0 0 0 / .05); --btn: #0b7a5e; --btn-hover: #09664f; --btn-text: #fff; --btn-divider: rgb(255 255 255 / .35); }
 	html.dark { color-scheme: dark; --bg: #0f1115; --surface: #171a21; --text: #e6edf3; --muted: #9aa4b2; --border: #303744; --user: #25213d; --assistant: #171a21; --accent: #35c89e; --link: #7ab7ff; --code-bg: #090c11; --code-text: #e6edf3; --shadow: rgb(0 0 0 / .3); --btn: #35c89e; --btn-hover: #5ad4b0; --btn-text: #06231a; --btn-divider: rgb(6 35 26 / .3); }
@@ -1288,6 +1384,26 @@ body { margin: 0; padding: 24px 16px 64px; background: var(--bg); color: var(--t
 .wrap { max-width: 820px; margin: 0 auto; }
 header.export-head { margin-bottom: 24px; }
 .export-head h1 { font-size: 1.5em; margin: 0 0 6px; word-wrap: break-word; }
+.export-title { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 20px; }
+.export-title h1 { flex: 1 1 300px; min-width: 0; }
+.context-gauge { flex: 0 0 auto; width: 292px; margin-bottom: 6px; padding: 8px 12px 9px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 1px 3px var(--shadow); color: var(--muted); font-size: 12px; line-height: 1.4; cursor: help; }
+.ctx-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ctx-label { font-weight: 600; letter-spacing: .02em; }
+.ctx-share { color: var(--text); font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ctx-bar { height: 6px; margin: 4px 0 6px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.ctx-fill { display: block; height: 100%; min-width: 2px; border-radius: inherit; background: var(--accent); transition: width .2s ease; }
+.context-gauge.ctx-high .ctx-fill { background: #d4a72c; }
+.context-gauge.ctx-over .ctx-fill { background: #cf222e; }
+.context-gauge.ctx-over .ctx-share { color: #cf222e; }
+	html.dark .context-gauge.ctx-over .ctx-share { color: #ff8182; }
+.ctx-sub { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 8px; }
+.ctx-note { white-space: nowrap; }
+.ctx-static { color: var(--text); font-weight: 600; }
+.ctx-window { display: none; margin: 0 1px; padding: 0 2px; font: inherit; font-weight: 600; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.ctx-window:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
+html.js .ctx-window { display: inline-block; }
+html.js .ctx-static { display: none; }
+@media (max-width: 560px) { .context-gauge { width: 100%; } }
 .meta { color: var(--muted); font-size: .85em; margin: 0 0 4px; }
 .meta a { color: var(--link); }
 .flag-ok { color: #1a7f37; font-weight: 600; }
@@ -1299,6 +1415,15 @@ header.export-head { margin-bottom: 24px; }
 	html.dark .message.user { border-color: #514c80; }
 .message:target { outline: 2px solid var(--accent); outline-offset: 2px; }
 .message h2 { margin: 0; font-size: .95em; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+.message-fold > summary { display: flex; align-items: baseline; gap: 4px 10px; padding-right: 60px; cursor: pointer; list-style: none; border-radius: 4px; }
+.message-fold > summary::-webkit-details-marker { display: none; }
+.message-fold > summary::before { content: ""; flex: none; align-self: flex-start; margin-top: .45em; width: 0; height: 0; border-style: solid; border-width: 5px 0 5px 8px; border-color: transparent transparent transparent var(--muted); transition: transform .12s ease; }
+.message-fold[open] > summary::before { transform: rotate(90deg); }
+.message-fold > summary:hover h2 { color: var(--text); }
+.message-fold > summary:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
+.message-fold > summary h2 { min-width: 0; }
+.message-peek { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: .88em; }
+.message-fold[open] .message-peek { display: none; }
 .msg-model { display: inline-block; margin-left: 8px; font-size: .88em; font-weight: 400; letter-spacing: 0; color: #8b949e; }
 .msg-time { font-weight: 400; letter-spacing: 0; color: #8b949e; margin-left: 8px; font-size: .92em; }
 .content { overflow-wrap: anywhere; margin-top: 10px; }
@@ -1444,7 +1569,7 @@ const EXPORT_JS = [
   '  for (var s = 0; s < steps.length; s++) steps[s].addEventListener("click", function (e) { go(Number(e.currentTarget.getAttribute("data-rail-step")) || 1); });',
   '  onBranchChange = function () { mark(); schedule(); };',
   '  mark(); paint(step(1));',
-  '  document.addEventListener("keydown", function (e) { var t = e.target; if (e.ctrlKey || e.metaKey || (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))) return; if (e.key === "j" || e.key === "n" || (e.altKey && e.key === "ArrowDown")) { e.preventDefault(); go(1); } else if (e.key === "k" || e.key === "p" || (e.altKey && e.key === "ArrowUp")) { e.preventDefault(); go(-1); } });',
+  '  document.addEventListener("keydown", function (e) { var t = e.target; if (e.ctrlKey || e.metaKey || (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable))) return; if (e.key === "j" || e.key === "n" || (e.altKey && e.key === "ArrowDown")) { e.preventDefault(); go(1); } else if (e.key === "k" || e.key === "p" || (e.altKey && e.key === "ArrowUp")) { e.preventDefault(); go(-1); } });',
   '})();',
 ].join('\n');
 
@@ -1487,7 +1612,22 @@ function renderMessageArticle(message, id, messageIndex, includeMessageModels, r
   }
   const hiddenClass = message.hidden ? ' message-hidden' : '';
   const datetime = timestampValue ? ` datetime="${escapeAttribute(timestampValue)}"` : '';
-  return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}${hiddenClass}" id="${id}" data-message-index="${messageIndex}" data-message-id="${escapeAttribute(message.id)}" dir="auto"><header class="message-header"><h2>${escapeHtml(message.authorLabel)}${messageModelLine(message, includeMessageModels)}${timestamp ? `<span class="msg-time"><time${datetime}>${escapeHtml(timestamp)}</time></span>` : ''}</h2></header>${copyButton}<div class="content message-body">${blocks}</div></article>`;
+  // Each message folds like a thinking block (v0.19.0): its header is the <summary>, so a
+  // click or Enter on it hides the body, with no script needed. Tool messages start folded,
+  // like Claude's tool blocks: they are supporting output, often long. A folded message
+  // shows the start of its text. The copy button sits outside the summary so that copying
+  // does not fold the message, and copying a folded message still copies all of it.
+  const peek = messagePeek(message);
+  const open = message.role === 'tool' ? '' : ' open';
+  return `<article class="message ${escapeAttribute(message.role)} message-${escapeAttribute(message.role)}${hiddenClass}" id="${id}" data-message-index="${messageIndex}" data-message-id="${escapeAttribute(message.id)}" dir="auto"><details class="message-fold"${open}><summary class="message-header"><h2>${escapeHtml(message.authorLabel)}${messageModelLine(message, includeMessageModels)}${timestamp ? `<span class="msg-time"><time${datetime}>${escapeHtml(timestamp)}</time></span>` : ''}</h2>${peek ? `<span class="message-peek">${escapeHtml(peek)}</span>` : ''}</summary><div class="content message-body">${blocks}</div></details>${copyButton}</article>`;
+}
+
+// The start of a message's text, shown in its header while it is folded.
+// Cut by characters, not UTF-16 units, so an emoji is never split in two.
+function messagePeek(message) {
+  const flat = messagePlainText(message).slice(0, 600).replace(/[\uD800-\uDBFF]$/, '').replace(/\s+/g, ' ').trim();
+  const characters = Array.from(flat);
+  return characters.length > 140 ? `${characters.slice(0, 139).join('')}…` : flat;
 }
 
 function renderMessageList(messages, branchIndex, branchCount, includeMessageModels, railItems, includeThinking = false) {
@@ -1565,6 +1705,7 @@ export function renderConversationHtml(conversation, { exportedAt = new Date().t
   const branchLine = availableBranchCount > 1 ? `<p class="meta">Branches: ${useLocalTree ? `${availableBranchCount} available; local fork controls shown` : branchCount > 1 ? `${branchCount} exported` : `1 of ${availableBranchCount} exported`}</p>` : '';
   const modelLine = formatModels(conversation);
   const statsLine = formatLocalStats(conversation.stats);
+  const contextGauge = renderContextGauge(conversation.stats?.context, provider, availableBranchCount);
   const omissionLine = conversation.stats.omittedBlockCount > 0
     ? `<p class="meta flag-warn">${conversation.stats.omittedBlockCount} omitted non-text block${conversation.stats.omittedBlockCount === 1 ? '' : 's'}</p>`
     : '<p class="meta flag-ok">Text blocks complete</p>';
@@ -1612,7 +1753,7 @@ ${idMeta}
 <nav id="rail" aria-label="Prompts"><h2>Prompts</h2><button class="rail-step" type="button" data-rail-step="-1" aria-label="Previous prompt" title="Previous prompt (k)">▲</button><ol>${railItems.join('')}</ol><button class="rail-step" type="button" data-rail-step="1" aria-label="Next prompt" title="Next prompt (j)">▼</button></nav>
 <div class="wrap">
 <header class="export-head">
-  <h1>${title}</h1>
+  <div class="export-title"><h1>${title}</h1>${contextGauge}</div>
   ${copyBar}
   ${metadata}
   ${branchLine}
@@ -1636,7 +1777,8 @@ ${messagesHtml}
 </main>
 </div>
 <script>${EXPORT_JS}
-${EXPORT_COPY_JS}</script>
+${EXPORT_COPY_JS}
+${EXPORT_CONTEXT_JS}</script>
 </body>
 </html>`;
 }

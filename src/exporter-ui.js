@@ -584,6 +584,9 @@
       const exportStats = deriveExportStats(statsMessages, statsBase, { model: conversation.model });
       // ChatGPT only: the estimate follows ChatGPT's tokenizer, and Claude's differs.
       if (provider === 'ChatGPT') exportStats.estimatedTokens = estimateTextTokens(exportStatsText(statsMessages));
+      // The context gauge counts the chat's current branch, whatever the export includes:
+      // only that branch is in the model's context, thinking and tool calls included.
+      exportStats.context = estimateContextUse(normalized.messages, { provider, countTokens: estimateTextTokens });
       const exportableConversation = { ...conversation, stats: exportStats };
       const exportedAt = new Date().toISOString();
       const html = renderConversationHtml(exportableConversation, {

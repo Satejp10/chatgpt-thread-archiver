@@ -4,21 +4,22 @@ import { dirname, resolve } from 'node:path';
 const root = resolve(new URL('.', import.meta.url).pathname);
 const source = async (name) => (await readFile(resolve(root, 'src', name), 'utf8')).replace(/^export\s+/gm, '');
 
-const [core, client, claude, assets, stats, estimate, ui] = await Promise.all([
+const [core, client, claude, assets, stats, estimate, context, ui] = await Promise.all([
   source('core.mjs'),
   source('chatgpt-client.mjs'),
   source('claude-client.mjs'),
   source('assets.mjs'),
   source('export-stats.mjs'),
   source('token-estimate.mjs'),
+  source('context-estimate.mjs'),
   readFile(resolve(root, 'src', 'exporter-ui.js'), 'utf8'),
 ]);
 
 const banner = `// ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.18.0
-// @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, uncapped image selection, quick export, formatted copy, and safe local statistics with a ChatGPT token estimate.
+// @version      0.19.0
+// @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, uncapped image selection, quick export, formatted copy, collapsible messages, and safe local statistics with a token estimate and context gauge.
 // @match        https://chatgpt.com/*
 // @match        https://claude.ai/*
 // @run-at       document-idle
@@ -31,6 +32,7 @@ ${claude}
 ${assets}
 ${stats}
 ${estimate}
+${context}
 ${ui}\n})();\n`;
 const output = resolve(root, 'dist', 'chatgpt-chats-exporter.user.js');
 await mkdir(dirname(output), { recursive: true });

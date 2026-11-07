@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
-import { copyMarkdownToHtml, normalizeConversation, renderConversationHtml, sanitizeFilename, textToBlocks, ConversationShapeError, selectConversationBranch, messagesFromBranchTree, discoverImageModelMetadata, extractTextBlocks } from './src/core.mjs';
+import { copyMarkdownToHtml, formatTokenEstimate, normalizeConversation, renderConversationHtml, sanitizeFilename, textToBlocks, ConversationShapeError, selectConversationBranch, messagesFromBranchTree, discoverImageModelMetadata, extractTextBlocks } from './src/core.mjs';
 import { ChatGPTClientError, clearAccessTokenCache, describeClientError, endpointCandidates, getAuthContext, getConversationIdFromUrl, isExporterRoute, parseConversationRoute } from './src/chatgpt-client.mjs';
 import { applyImageBudget, candidateDownloadUrl, IMAGE_LIMITS, resolveClaudeConversationImages, resolveConversationImages, retryDelayMs, summarizeImageStats } from './src/assets.mjs';
-import { deriveExportStats } from './src/export-stats.mjs';
+import { deriveExportStats, exportStatsText } from './src/export-stats.mjs';
+import { estimateTextTokens, o200kPieceFamily, o200kSegmentLanguage, splitO200kPieces } from './src/token-estimate.mjs';
 import { ClaudeClientError, claudeConversationPath, claudeIdFormat, claudeRequestShapes, describeClaudeError, fetchClaudeConversation, getClaudeConversationIdFromUrl, isClaudeExporterRoute, normalizeClaudeConversation, parseClaudeConversationRoute, redactClaudePath } from './src/claude-client.mjs';
 
 const load = async (name) => JSON.parse(await readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
@@ -15,6 +16,8 @@ const assetsSource = await readFile(new URL('./src/assets.mjs', import.meta.url)
 const statsSource = await readFile(new URL('./src/export-stats.mjs', import.meta.url), 'utf8');
 const claudeSource = await readFile(new URL('./src/claude-client.mjs', import.meta.url), 'utf8');
 const buildSource = await readFile(new URL('./build.mjs', import.meta.url), 'utf8');
+const estimateSource = await readFile(new URL('./src/token-estimate.mjs', import.meta.url), 'utf8');
+const fitToolSource = await readFile(new URL('./tools/fit-token-estimate.mjs', import.meta.url), 'utf8');
 
 const simple = normalizeConversation(await load('simple-conversation.json'));
 assert.equal(simple.messages.length, 2);
@@ -49,8 +52,8 @@ assert.match(simpleHtml, /id="copy-bar"/);
 assert.match(simpleHtml, /id="copy-chat"/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.17\.0"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.17\.0/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.18\.0"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.18\.0/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -227,7 +230,7 @@ assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.17\.0/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.18\.0/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -1241,7 +1244,7 @@ assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.17\.0/);
+assert.match(buildSource, /@version      0\.18\.0/);
 // The script runs on the whole host so a chat started on the home page gets the button
 // without a reload; the route check decides where the button shows.
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/*\n'));
@@ -1366,6 +1369,70 @@ assert.match(uiSource, /Your choices are saved, and Quick export reuses them\./)
 assert.match(uiSource, /button\.setAttribute\('aria-disabled', busy \? 'true' : 'false'\);/);
 assert.match(uiSource, /if \(control\?\.dataset\.state === 'busy'\) return;/);
 assert.doesNotMatch(uiSource, /button\.disabled = busy/);
+
+// v0.18.0 — Local token estimate for ChatGPT exports.
+// The split is o200k_base's own pre-tokenizer: contractions, camelCase, three-digit number
+// groups, and a space left before a word after a line break, as the real tokenizer does.
+assert.deepEqual(splitO200kPieces("don't WE'LL it's"), ["don't", " WE'LL", " it's"]);
+assert.deepEqual(splitO200kPieces('camelCaseHTTPServer v2'), ['camel', 'Case', 'HTTPServer', ' v', '2']);
+assert.deepEqual(splitO200kPieces('1234567 3.14'), ['123', '456', '7', ' ', '3', '.', '14']);
+assert.deepEqual(splitO200kPieces('x\r\n\r\n  y'), ['x', '\r\n\r\n', ' ', ' y']);
+assert.deepEqual(splitO200kPieces('ok 😂😂 done!!'), ['ok', ' 😂😂', ' done', '!!']);
+assert.deepEqual(splitO200kPieces('日本語のテキスト'), ['日本語のテキスト']);
+assert.deepEqual(o200kPieceFamily(' Hello'), { family: 'latin.sC', length: 5, letters: true });
+assert.deepEqual(o200kPieceFamily('HTTP'), { family: 'latin.nU', length: 4, letters: true });
+assert.deepEqual(o200kPieceFamily(' naïve'), { family: 'latin.sld', length: 5, letters: true });
+assert.deepEqual(o200kPieceFamily(' नमस्ते'), { family: 'devanagari.s', length: 6, letters: true });
+assert.deepEqual(o200kPieceFamily('123'), { family: 'digits', length: 1, letters: false });
+assert.deepEqual(o200kPieceFamily('\n\n'), { family: 'newline', length: 2, letters: false });
+assert.deepEqual(o200kPieceFamily(' **'), { family: 'punct.s', length: 2, letters: false });
+assert.deepEqual(o200kPieceFamily(' 😂😂'), { family: 'punct.su', length: 2, letters: false });
+// A paragraph counts as a language only when its common words clearly say so.
+assert.equal(o200kSegmentLanguage(splitO200kPieces('Il gatto è sul tavolo e non vuole scendere per la cena di questa sera.')), 'it');
+assert.equal(o200kSegmentLanguage(splitO200kPieces('The cat is on the table and it would not come down for dinner.')), 'en');
+assert.equal(o200kSegmentLanguage(splitO200kPieces('ok thanks')), '');
+assert.equal(o200kSegmentLanguage(splitO200kPieces('写真の説明をしてください')), 'ja');
+assert.equal(estimateTextTokens(''), 0);
+assert.equal(estimateTextTokens(null), 0);
+assert.equal(estimateTextTokens('Hello'), 1);
+// Accuracy against the real tokenizer, on original samples the table was not fitted on.
+// The limits leave room for a refit; a broken split or table misses them by far (characters
+// ÷ 4 is 25% off on the other-language samples).
+const tokenSamples = (await load('token-estimate-samples.json')).samples;
+const sampleLimit = { english: 0.1, code: 0.12, other: 0.18 };
+for (const sample of tokenSamples) {
+  const estimated = estimateTextTokens(sample.text);
+  assert.ok(Math.abs(estimated / sample.o200k - 1) <= sampleLimit[sample.group], `${sample.name}: estimated ${estimated}, real ${sample.o200k}`);
+}
+const groupLimit = { english: 0.05, code: 0.08, other: 0.08 };
+for (const [group, limit] of Object.entries(groupLimit)) {
+  const members = tokenSamples.filter((sample) => sample.group === group);
+  const estimated = members.reduce((sum, sample) => sum + estimateTextTokens(sample.text), 0);
+  const real = members.reduce((sum, sample) => sum + sample.o200k, 0);
+  assert.ok(Math.abs(estimated / real - 1) <= limit, `${group}: estimated ${estimated}, real ${real}`);
+}
+// The estimate is local: no request, storage or provider data of any kind.
+assert.doesNotMatch(estimateSource, /fetch\(|XMLHttpRequest|sendBeacon|WebSocket|localStorage|sessionStorage|https?:\/\//);
+assert.match(estimateSource, /\/\/ BEGIN GENERATED O200K_TABLE[\s\S]*'latin\.sl': \[[\s\S]*\/\/ END GENERATED O200K_TABLE/);
+// The fitting tool loads the real tokenizer only when run by hand; the build never includes it.
+assert.match(fitToolSource, /await import\('gpt-tokenizer\/encoding\/o200k_base'\)/);
+assert.doesNotMatch(buildSource, /tools\//);
+assert.match(buildSource, /source\('token-estimate\.mjs'\)/);
+assert.match(buildSource, /\$\{stats\}\n\$\{estimate\}\n\$\{ui\}/);
+// It counts the same text as the word and character counts.
+assert.equal(deriveExportStats(simple.messages, simple.stats).characterCount, [...exportStatsText(simple.messages)].length);
+// ChatGPT exports carry it; Claude exports do not, because Claude's tokenizer differs.
+assert.match(uiSource, /if \(provider === 'ChatGPT'\) exportStats\.estimatedTokens = estimateTextTokens\(exportStatsText\(statsMessages\)\);/);
+assert.match(uiSource, /characters and about \$\{formatTokenEstimate\(exportStats\.estimatedTokens\)\} tokens counted locally\./);
+assert.equal(formatTokenEstimate(0), '0');
+assert.equal(formatTokenEstimate(652), '652');
+assert.equal(formatTokenEstimate(2237), '2,240');
+assert.equal(formatTokenEstimate(123456), '123,000');
+assert.equal(formatTokenEstimate(999999), '1,000,000');
+const estimateHtml = renderConversationHtml({ ...simple, stats: { ...deriveExportStats(simple.messages, simple.stats), estimatedTokens: 2237 } }, { exportedAt: '2026-11-07T00:00:00.000Z' });
+assert.match(estimateHtml, /<span title="[^"]*hidden reasoning, system instructions and uploaded files are not included\.">about 2,240 tokens \(local estimate\)<\/span>\. Counted from exported text only; provider token and context-window usage are not included\./);
+const noEstimateHtml = renderConversationHtml({ ...simple, stats: deriveExportStats(simple.messages, simple.stats) }, { exportedAt: '2026-11-07T00:00:00.000Z' });
+assert.doesNotMatch(noEstimateHtml, /tokens \(local estimate\)/);
 
 assert.throws(() => normalizeConversation({ title: 'No messages' }), ConversationShapeError);
 

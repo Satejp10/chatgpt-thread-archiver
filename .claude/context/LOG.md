@@ -431,3 +431,41 @@ about the `Image model:` caption and the two root Markdown files were never answ
 **Open:** The owner picks the next feature. Still open: the `Image model:` caption decision
 and the `diagnostics/` clean-up it blocks; the parked Claude 404; Claude PDFs and text
 attachments.
+
+## 2026-11-07 — v0.18.0: local token estimate for ChatGPT exports
+
+**Did:** Owner asked whether the word and character stats could become a token estimate,
+and how accurate it would be. Researched three ways (characters ÷ 4, a "smart" estimate,
+bundling OpenAI's tokenizer) and how Claude's usage could be estimated. Owner then chose
+the smart estimate for ChatGPT. Built it as v0.18.0 on `claude/awesome-keller-x2q8fp`:
+`src/token-estimate.mjs`, the development tool `tools/fit-token-estimate.mjs`, the
+fixture `fixtures/token-estimate-samples.json`, tests, and docs. Checked in Chromium with
+Playwright on stand-in ChatGPT and Claude pages. Research notes are in the owner's Box
+folder for this project.
+
+**Decided:** No vocabulary in the script. Bundling OpenAI's real tokenizer would make it
+exact for ChatGPT but adds about 2.4 MB, ten times the script; the estimate adds about
+21 KB. ChatGPT only: Claude's tokenizer is unpublished, and Anthropic's counting endpoint
+needs an API key and would send the chat out. The figure reads `about N tokens (local
+estimate)`, rounded to three significant figures, and counts the same text as the word
+count. It lives in its own module so `export-stats.mjs` keeps its no-token-API guard.
+Rejected: characters ÷ 4 (3–25% off on English, about 70% off on Chinese and Japanese).
+
+**Learned:** o200k_base's pre-tokenizer pattern splits text exactly as the tokenizer does,
+and no token crosses two pieces, so only the per-piece counts need estimating. Every one-
+to three-digit ASCII number is one token. English and code set the shared table best;
+other Latin-script languages need their own factors (Italian came out 14% low without
+them). A Claude export's thinking holds only Claude's summary lines (confirmed in
+v0.15.0). Anthropic's API docs say no setting returns the raw reasoning, that billing
+counts the full reasoning, and that Opus 4.5 and later keep earlier turns' reasoning in
+context; that is not confirmed for the Claude app. Per Claude's help pages, Opus 5.5 has a
+1M-token context in chat, and with code execution on, Claude summarizes earlier messages
+near the limit. In this session's own log, Opus 5.5 produced thinking at a median
+96 tokens per second (84–106), so thinking time predicts hidden thinking well (1% off over
+the session). That figure was measured through the API, not in the Claude app.
+
+**Open:** Live acceptance of v0.18.0 (two rows in `docs/user-test-checklist.md`). A Claude
+estimate would add up the parts: thinking time × about 100 tokens per second, a fixed
+allowance for Claude's published instructions (about 6,200 o200k tokens for Opus 5.5 on
+2026-10-27, before tool descriptions), images by Anthropic's formula, and the counted
+text × about 1.4. It is not built.

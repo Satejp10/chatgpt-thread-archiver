@@ -110,6 +110,8 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Copy chat options (v0.17.0) | Open the arrow beside **Copy chat**, tick **Thinking** and **Tool calls and results** in a Claude export made with thinking included, copy and paste | Thinking appears as a quote with its summary lines, tool calls with their input and results as code blocks; in an export without thinking both choices are greyed out |
 | Copy follows the shown version (v0.17.0) | In an **All branches** export, switch a ‹ 1/2 › control and click **Copy chat** | The copy has the version on screen, not the other one |
 | Message Copy button (v0.17.0) | Click **Copy** on a reply with a code block and paste into Obsidian | The code block stays a fenced code block |
+| Token estimate, ChatGPT (v0.18.0) | Export a ChatGPT chat | The stats line in the file ends with `about N tokens (local estimate)`, and holding the pointer over it explains what is not counted; the message after the download gives the same number |
+| No token estimate, Claude (v0.18.0) | Export a Claude chat | The stats line shows words, characters and text blocks only, as before |
 
 ## Failure report template
 

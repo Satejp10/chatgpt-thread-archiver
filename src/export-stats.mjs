@@ -15,9 +15,14 @@ function safeModelIdentifier(value) {
   return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(model) ? model : null;
 }
 
+// The text every local count is taken from: each message's text and code blocks, in order.
+export function exportStatsText(messages) {
+  return (Array.isArray(messages) ? messages : []).map(statText).filter(Boolean).join('\n');
+}
+
 export function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
   const list = Array.isArray(messages) ? messages : [];
-  const text = list.map(statText).filter(Boolean).join('\n');
+  const text = exportStatsText(list);
   const modelsUsed = [...new Set([
     safeModelIdentifier(model),
     ...list.map((message) => safeModelIdentifier(message?.modelSlug)),

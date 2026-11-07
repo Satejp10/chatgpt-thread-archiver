@@ -2,6 +2,20 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.18.0] — 2026-11-07
+
+### Added
+
+**Token estimate for ChatGPT exports.** The stats line in a ChatGPT export now ends with, for example, `about 2,240 tokens (local estimate)`, and the message after the download gives the same number. It estimates how many tokens the exported text comes to in the tokenizer ChatGPT's models have used since GPT-4o. Your browser works it out from the text alone, with no request to ChatGPT or anyone else. The real tokenizer would have added about 2.4 MB to the script; the estimate adds about 21 KB.
+
+How close it is, measured against OpenAI's real tokenizer on text the estimate was not tuned on:
+
+- **English and code:** within about 3% for a whole chat. A single message is typically 2–3% off and seldom more than 8%.
+- **24 other languages it was tuned on** (Spanish, French, German, Italian, Portuguese, Dutch, Polish, Turkish, Vietnamese, Indonesian, Russian, Ukrainian, Greek, Arabic, Persian, Hebrew, Hindi, Marathi, Bengali, Tamil, Thai, Chinese, Japanese and Korean): within about 3% for a whole text. A single message is typically 3–10% off and seldom more than 16%.
+- **Other languages:** usually too low. In tests, Czech, Hungarian and Swedish came out 5–8% low, Romanian 12% low and Finnish 23% low.
+
+It counts the exported text only. ChatGPT's own token and context-window use is higher: it also includes hidden reasoning, system instructions and uploaded files, and no export contains those. Claude exports show no estimate, because Claude's tokenizer is different and unpublished.
+
 ## [0.17.0] — 2026-11-01
 
 ### Added

@@ -582,6 +582,8 @@
         : conversation.messages;
       const statsBase = conversation.stats;
       const exportStats = deriveExportStats(statsMessages, statsBase, { model: conversation.model });
+      // ChatGPT only: the estimate follows ChatGPT's tokenizer, and Claude's differs.
+      if (provider === 'ChatGPT') exportStats.estimatedTokens = estimateTextTokens(exportStatsText(statsMessages));
       const exportableConversation = { ...conversation, stats: exportStats };
       const exportedAt = new Date().toISOString();
       const html = renderConversationHtml(exportableConversation, {
@@ -597,7 +599,9 @@
       const imageSummary = Number.isFinite(exportStats.imageCount) && exportStats.imageCount > 0
         ? ` ${exportStats.imageEmbeddedCount} image(s) embedded; ${exportStats.imageUnavailableCount} unavailable${exportStats.imageBudgetLimitedCount ? `; ${exportStats.imageBudgetLimitedCount} limited by export budget` : ''}.`
         : '';
-      const localStats = `${exportStats.wordCount.toLocaleString('en-US')} words and ${exportStats.characterCount.toLocaleString('en-US')} characters counted locally.`;
+      const localStats = Number.isFinite(exportStats.estimatedTokens)
+        ? `${exportStats.wordCount.toLocaleString('en-US')} words, ${exportStats.characterCount.toLocaleString('en-US')} characters and about ${formatTokenEstimate(exportStats.estimatedTokens)} tokens counted locally.`
+        : `${exportStats.wordCount.toLocaleString('en-US')} words and ${exportStats.characterCount.toLocaleString('en-US')} characters counted locally.`;
       const settingsLine = settingsNote ? `\n${settingsNote} Change them with ${MENU_LABEL}` : '';
       showStatus('Download ready', `${exportStats.messageCount} ${provider} message(s) exported; ${exportStats.omittedBlockCount} unsupported block(s) marked.${imageSummary} ${localStats}${settingsLine}`);
     } catch (error) {

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ChatGPT Thread Archiver
 // @namespace    local.chatgpt-thread-archiver
-// @version      0.17.0
-// @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, uncapped image selection, quick export, formatted copy, and safe local statistics.
+// @version      0.18.0
+// @description  Export ChatGPT or Claude.ai conversations to self-contained HTML with branch choices, uncapped image selection, quick export, formatted copy, and safe local statistics with a ChatGPT token estimate.
 // @match        https://chatgpt.com/*
 // @match        https://claude.ai/*
 // @run-at       document-idle
@@ -11,7 +11,7 @@
 
 (() => {
 'use strict';
-const ARCHIVER_VERSION = '0.17.0';
+const ARCHIVER_VERSION = '0.18.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -733,12 +733,24 @@ function roleCounts(messages, provider = 'ChatGPT') {
   return [...counts.entries()].map(([role, count]) => `${count} ${role === 'assistant' ? provider : (ROLE_LABELS[role] ?? role)}`).join(', ');
 }
 
+// The token estimate is rounded to three significant figures (exact below 1,000): its
+// last digits would claim more precision than an estimate has.
+function formatTokenEstimate(count) {
+  const value = Math.max(0, Math.round(Number(count) || 0));
+  if (value < 1000) return value.toLocaleString('en-US');
+  const step = 10 ** (String(value).length - 3);
+  return (Math.round(value / step) * step).toLocaleString('en-US');
+}
+
+const TOKEN_ESTIMATE_NOTE = 'Estimated in your browser for the tokenizer ChatGPT models have used since GPT-4o. It counts the exported text only: hidden reasoning, system instructions and uploaded files are not included.';
+
 function formatLocalStats(stats) {
   if (!Number.isFinite(stats?.wordCount) || !Number.isFinite(stats?.characterCount)) return '';
   const words = Number(stats.wordCount).toLocaleString('en-US');
   const characters = Number(stats.characterCount).toLocaleString('en-US');
   const blocks = Number.isFinite(stats.textBlockCount) ? ` · ${Number(stats.textBlockCount).toLocaleString('en-US')} text blocks` : '';
-  return `<p class="meta">Safe local stats: ${words} words · ${characters} characters${blocks}. Counted from exported text only; provider token and context-window usage are not included.</p>`;
+  const tokens = Number.isFinite(stats.estimatedTokens) ? ` · <span title="${escapeAttribute(TOKEN_ESTIMATE_NOTE)}">about ${formatTokenEstimate(stats.estimatedTokens)} tokens (local estimate)</span>` : '';
+  return `<p class="meta">Safe local stats: ${words} words · ${characters} characters${blocks}${tokens}. Counted from exported text only; provider token and context-window usage are not included.</p>`;
 }
 
 function safeModelLabel(value) {
@@ -3642,9 +3654,14 @@ function safeModelIdentifier(value) {
   return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(model) ? model : null;
 }
 
+// The text every local count is taken from: each message's text and code blocks, in order.
+function exportStatsText(messages) {
+  return (Array.isArray(messages) ? messages : []).map(statText).filter(Boolean).join('\n');
+}
+
 function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
   const list = Array.isArray(messages) ? messages : [];
-  const text = list.map(statText).filter(Boolean).join('\n');
+  const text = exportStatsText(list);
   const modelsUsed = [...new Set([
     safeModelIdentifier(model),
     ...list.map((message) => safeModelIdentifier(message?.modelSlug)),
@@ -3663,6 +3680,302 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
     characterCount: [...text].length,
     modelsUsed,
   };
+}
+
+// Local token estimate for ChatGPT exports (v0.18.0).
+//
+// ChatGPT's current models (GPT-4o, GPT-4.1, the o-series and the GPT-5 family) use
+// OpenAI's o200k_base tokenizer. Its vocabulary would add about 2.4 MB to this script,
+// so the count is estimated instead:
+//
+// 1. Split the text exactly as o200k_base does before it encodes anything.
+//    O200K_PIECE_PATTERN is the tokenizer's own pre-tokenizer pattern from OpenAI's
+//    tiktoken (contractions spelled out instead of the `(?i:…)` group). No token crosses
+//    two pieces, so the text's count is the sum of its pieces' counts.
+// 2. Sort each piece into a family (letters by script, case and what comes before them;
+//    digits; spaces; line breaks; punctuation and symbols) and measure its length, then
+//    look up the average token count measured for that family and length against the
+//    real tokenizer. Pieces longer than the table use a per-character rate.
+// 3. Paragraphs that read as code use their own families. In other paragraphs, count very
+//    common words of a few languages (kana and Han letters for Japanese and Chinese).
+//    Where one language clearly leads, scale the paragraph's word pieces by the factors
+//    measured for it, because the same script splits differently from one language to
+//    the next.
+//
+// O200K_TABLE is generated by tools/fit-token-estimate.mjs; docs/maintenance-notes.md
+// says how. Everything here is local: it counts only the text it is given, makes no
+// request, and is never a provider token, billing or context-window figure.
+
+const O200K_PIECE_PATTERN = /[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+/gu;
+const O200K_LETTERS = /[\p{L}\p{M}]/gu;
+const O200K_LETTER = /[\p{L}\p{M}]/u;
+const O200K_UPPER = /\p{Lu}/u;
+const O200K_DIGIT = /\p{N}/u;
+const O200K_ASCII_LETTER = /[A-Za-z]/;
+const O200K_NON_ASCII = /[^\x00-\x7f]/;
+const O200K_BLANK_LINE = /\n[^\S\n]*\n/;
+const O200K_KANA_LETTERS = /[\p{Script=Hiragana}\p{Script=Katakana}]/gu;
+const O200K_HAN_LETTERS = /\p{Script=Han}/gu;
+const O200K_LEADING_NON_LETTERS = /^[^\p{L}]+/u;
+const O200K_ACCENTED_LATIN = /(?![A-Za-z])\p{Script=Latin}/gu;
+// Braces, semicolons, `=`, angle and square brackets, or an empty `()`. Plain parentheses
+// are left out because prose uses them too.
+const O200K_CODE_MARK = /[{};=<>[\]]|\(\)/;
+const O200K_SCRIPTS = [
+  ['latin', /\p{Script=Latin}/u],
+  ['cyrillic', /\p{Script=Cyrillic}/u],
+  ['greek', /\p{Script=Greek}/u],
+  ['arabic', /\p{Script=Arabic}/u],
+  ['hebrew', /\p{Script=Hebrew}/u],
+  ['devanagari', /\p{Script=Devanagari}/u],
+  ['bengali', /\p{Script=Bengali}/u],
+  ['tamil', /\p{Script=Tamil}/u],
+  ['indic', /[\p{Script=Gurmukhi}\p{Script=Gujarati}\p{Script=Oriya}\p{Script=Telugu}\p{Script=Kannada}\p{Script=Malayalam}\p{Script=Sinhala}]/u],
+  ['han', /\p{Script=Han}/u],
+  ['kana', /[\p{Script=Hiragana}\p{Script=Katakana}]/u],
+  ['hangul', /\p{Script=Hangul}/u],
+  ['thai', /\p{Script=Thai}/u],
+];
+// Pieces of this many letters or more use the family's per-character rate.
+const O200K_LENGTH_CAP = 16;
+// Very common words that are rare in the other listed languages. Words that also turn up in
+// English or in code (`el`, `del`, `os`, `no`, `do`, `per`, `come`, `van`, `door`, single
+// letters) are left out. Japanese is recognised by its kana instead. A paragraph needs at
+// least two hits, and 1.5 times the runner-up, to count as one language.
+const O200K_LANGUAGE_HINTS = {
+  en: 'the and of that with this was are you have from which what would there their been were they these about should could will your',
+  es: 'los las por una pero más también muy fue sus está este esta entre sobre cuando hasta porque aunque donde ellos',
+  fr: 'le les des est une dans pour pas qui sur avec sont cette aux du et au été ont mais leur comme',
+  de: 'der die und das ist nicht mit den ein eine auf sich dem auch wird sind für von wurde zu im',
+  it: 'il della che non sono gli dei nel alla anche questo è delle più stato degli questa essere quando molto',
+  pt: 'não uma com são mais dos pelo pela também muito foi seu sua ao à você isso pelos',
+  nl: 'het een niet zijn voor worden wordt ook deze naar bij maar werd heeft hebben nog zoals tussen',
+  pl: 'się nie jest że jak ale przez oraz jego był są który która które może tylko jako tego jednak',
+  tr: 'bir ve bu için ile olarak olan çok daha gibi ancak sonra kadar ise değil',
+  vi: 'và của là có được trong những các cho không này với một người đã khi từ',
+  id: 'yang dengan untuk dalam ini itu dari pada adalah tidak akan oleh juga sebagai atau bahwa karena tersebut dapat telah',
+  ru: 'и в не на что с по это как его для из был от но также который',
+  uk: 'і в не на що з до це як його для від але також який був та у',
+  ar: 'في من على إلى أن التي الذي عن مع هذا كان هذه لا ما بين',
+  fa: 'و در به از که این را با است برای آن یک می شده بر تا',
+  hi: 'के में की है और से को का एक पर यह भी हैं किया लिए नहीं था गया',
+  mr: 'आणि आहे या व हे ही मध्ये होते केले करण्यात म्हणून असे आहेत तसेच',
+};
+let o200kHintWords = null;
+
+// BEGIN GENERATED O200K_TABLE (tools/fit-token-estimate.mjs)
+// families: average tokens by length from 1 character up, then tokens per character.
+// languages: factors for word pieces of 1–3, 4–7 and 8 or more letters.
+const O200K_TABLE = {
+  families: {
+    'arabic.n': [1, 1.039, 1.485, 2.082, 2.576, 2.823, 3.102, 3.5, 4.091, 4.393, 0.487],
+    'arabic.p': [1.375, 1.185, 1.36, 2.044, 2.907, 3.205, 3.723, 4.101, 0.516],
+    'arabic.s': [1, 1.003, 1.121, 1.444, 1.781, 2.145, 2.266, 2.703, 3.251, 3.656, 4.227, 4.788, 5.797, 7.627, 0.706],
+    'bengali.n': [1, 1.532, 1.959, 2.336, 2.721, 3.448, 3.844, 3.69, 4.305, 5.033, 5.21, 0.429],
+    'bengali.p': [1.643, 1.499, 2.271, 3.232, 3.659, 4.022, 4.332, 4.805, 5.478, 0.647],
+    'bengali.s': [1, 1.047, 1.166, 1.485, 1.916, 2.365, 2.759, 3.01, 3.59, 4.011, 4.404, 4.609, 5.458, 5.402, 6.302, 0.419],
+    'code.cyrillic.s': [1, 0.276],
+    'code.digits': [1, 1],
+    'code.latin.nC': [1, 1, 1.025, 1.01, 1.019, 1.014, 1.04, 1.031, 1.318, 1.187, 1.36, 1.062, 0.193],
+    'code.latin.nU': [1, 1, 1.088, 1.217, 1.613, 1.808, 1.346, 2, 0.038],
+    'code.latin.nl': [1, 1, 1.084, 1.012, 1.059, 1.075, 1.29, 1.158, 1.348, 1.521, 1.725, 1.279, 0.203],
+    'code.latin.pC': [1.333, 1.079, 1.132, 1.199, 1.537, 1.436, 1.592, 2.3, 0.337],
+    'code.latin.pU': [1, 1.008, 1.357, 1.231, 1.32, 2.249, 1.895, 2.303, 2.198, 0.324],
+    'code.latin.pl': [1.024, 1.078, 1.089, 1.097, 1.1, 1.195, 1.276, 1.449, 1.882, 1.836, 1.904, 2.236, 2.05, 0.176],
+    'code.latin.sC': [1, 1.037, 1, 1.02, 1.065, 1.036, 1.215, 1.279, 1.487, 0.217],
+    'code.latin.sU': [1, 1, 1.024, 1.183, 1.376, 2.164, 1.695, 2.395, 0.308],
+    'code.latin.sl': [1, 1, 1.005, 1.005, 1.006, 1.041, 1.041, 1.061, 1.159, 1.144, 1.259, 1.111, 0.188],
+    'code.newline': [1, 1, 1, 1, 0.156],
+    'code.punct': [1, 1.006, 1.143, 1.686, 2.112, 2.503, 3.353, 3.63, 4.423, 4.864, 0.359],
+    'code.punct.s': [1, 1.017, 1.109, 1.502, 2.067, 2.314, 0.095],
+    'code.punct.su': [1, 1],
+    'code.punctu': [1.143, 0.72],
+    'code.space': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0.043],
+    'cyrillic.n': [1, 1.161, 1.485, 2.205, 2.43, 2.761, 3.147, 3.115, 3.626, 3.925, 4.131, 4.218, 4.58, 4.969, 4.846, 0.338],
+    'cyrillic.p': [1.305, 1.64, 2.171, 2.327, 2.903, 3.189, 3.488, 3.83, 4.233, 4.613, 4.581, 4.612, 4.482, 5.019, 5.071, 0.363],
+    'cyrillic.s': [1, 1.054, 1.167, 1.419, 1.768, 2.01, 2.212, 2.476, 2.735, 2.835, 3.088, 3.083, 3.245, 3.321, 3.75, 0.275],
+    'devanagari.n': [1, 1.112, 1.945, 2.226, 2.515, 3.168, 3.617, 4.012, 4.195, 4.806, 4.788, 5.512, 0.463],
+    'devanagari.p': [1.909, 2, 2.301, 2.933, 3.264, 3.753, 4.008, 4.188, 4.717, 5.789, 0.5],
+    'devanagari.s': [1.001, 1.01, 1.174, 1.402, 1.944, 2.182, 2.484, 2.942, 3.28, 3.698, 4.017, 4.552, 4.455, 5.472, 6.039, 0.437],
+    'digits': [1, 1],
+    'digits.u': [1.458, 1.458],
+    'greek.n': [1, 1.137, 1.828, 2.214, 2.852, 3.135, 3.878, 4.233, 4.441, 4.529, 4.75, 5.267, 0.4],
+    'greek.p': [1.783, 0.869],
+    'greek.s': [1.002, 1.032, 1.046, 1.414, 2.166, 2.958, 3.344, 3.706, 3.797, 4.146, 4.343, 4.677, 5.277, 5.481, 5.337, 0.345],
+    'han.n': [1.012, 1.83, 2.738, 3.674, 4.596, 5.465, 6.068, 7.147, 7.997, 8.662, 9.758, 10.426, 11.313, 12.381, 12.938, 0.87],
+    'han.p': [1.835, 2.815, 3.856, 4.793, 5.635, 6.483, 7.348, 8.274, 9.092, 9.867, 10.681, 11.578, 12.527, 13.41, 14.153, 0.917],
+    'han.s': [1.364, 2.584, 3.566, 4.494, 5.071, 5.612, 6.674, 7.416, 8.511, 9.612, 10.214, 10.849, 11.258, 0.887],
+    'hangul.n': [1.009, 1.853, 2.492, 3.439, 4.24, 5.114, 0.892],
+    'hangul.p': [1.524, 2.738, 3.533, 4.345, 5.411, 1.262],
+    'hangul.s': [1.062, 1.56, 2.415, 2.982, 3.864, 4.922, 5.759, 6.91, 7.625, 8.456, 0.786],
+    'hebrew.n': [1, 1.071, 1.957, 2.237, 2.642, 2.929, 3.396, 3.819, 0.534],
+    'hebrew.p': [1.204, 2.001, 2.757, 3.002, 3.457, 3.695, 4.451, 4.709, 5.723, 0.705],
+    'hebrew.s': [1, 1.012, 1.265, 1.821, 2.218, 2.605, 2.976, 3.425, 3.96, 4.399, 5.081, 6.05, 6.948, 0.813],
+    'indic.s': [1, 1.037, 1.556, 1.937, 1.569, 3.57, 4.119, 0.519],
+    'kana.n': [1, 1.23, 1.883, 3.258, 4.046, 4.579, 5.25, 6.137, 7.067, 8.368, 8.897, 9.699, 10.473, 11.503, 12.633, 0.837],
+    'kana.p': [1.5, 1.935, 2.603, 4.07, 4.716, 5.666, 6.363, 7.164, 8.072, 8.927, 9.793, 10.637, 11.443, 12.458, 13.449, 0.863],
+    'kana.s': [1, 1.728, 2.601, 3.28, 3.961, 5.047, 5.818, 6.692, 7.596, 8.201, 9.504, 9.982, 0.828],
+    'latin.nC': [1, 1.011, 1.032, 1.097, 1.076, 1.249, 1.41, 1.347, 1.701, 2.051, 1.869, 1.395, 2.55, 2.617, 0.248],
+    'latin.nCd': [1, 1.819, 2.234, 2.739, 2.747, 3.564, 3.686, 4.938, 4.973, 5.493, 0.747],
+    'latin.nU': [1, 1.003, 1.243, 1.689, 1.992, 2.435, 2.465, 2.965, 2.567, 0.414],
+    'latin.nl': [1, 1.002, 1.048, 1.042, 1.112, 1.229, 1.332, 1.444, 1.668, 1.995, 1.987, 1.616, 2.166, 3.107, 3.077, 0.202],
+    'latin.nld': [1, 1.804, 2.522, 3.073, 4.109, 3.665, 0.844],
+    'latin.pC': [1.312, 1.507, 1.549, 1.395, 1.754, 2.387, 2.162, 2.356, 3.047, 3.418, 3.027, 2.841, 0.174],
+    'latin.pCd': [1, 1.81, 2.5, 3.556, 4.121, 4.527, 5.108, 5.73, 6.251, 7.489, 8.345, 9.501, 10.053, 0.767],
+    'latin.pU': [1, 1.577, 1.919, 2.167, 1.771, 2.268, 2.166, 3.036, 2.254, 3.78, 0.465],
+    'latin.pl': [1.048, 1.065, 1.18, 1.144, 1.242, 1.413, 1.602, 1.839, 1.895, 2.106, 2.11, 2.466, 2.383, 3.133, 3.825, 0.256],
+    'latin.pld': [1.545, 0.609],
+    'latin.sC': [1, 1.004, 1.012, 1.078, 1.148, 1.192, 1.382, 1.408, 1.673, 1.745, 1.902, 1.958, 2.177, 2.655, 3.553, 0.22],
+    'latin.sCd': [1, 1.67, 1.966, 2.166, 2.486, 2.556, 2.491, 2.926, 2.882, 3.485, 3.587, 3.732, 5.541, 4.9, 0.606],
+    'latin.sU': [1, 1.004, 1.153, 1.221, 1.827, 2.221, 2.646, 2.545, 2.712, 0.377],
+    'latin.sl': [1, 1, 1.004, 1.008, 1.029, 1.04, 1.078, 1.133, 1.178, 1.242, 1.293, 1.361, 1.46, 1.722, 2.39, 0.2],
+    'latin.sld': [1, 1.476, 1.262, 1.365, 1.758, 1.796, 1.944, 2.327, 2.691, 2.962, 3.248, 4.064, 4.201, 0.576],
+    'newline': [1, 1, 1, 1, 1.2, 1, 1.167, 1, 1.9, 1, 1.014, 1.869, 1.284, 1.028, 0.096],
+    'other.n': [1, 0.923],
+    'punct': [1, 1.022, 1.152, 1.271, 1.871, 2.163, 3.132, 3.708, 4.571, 0.067],
+    'punct.s': [1, 1.242, 1.646, 1.948, 2.163, 2.354, 2.333, 2.133, 0.107],
+    'punct.su': [1.037, 1.584, 2.808, 1.019],
+    'punctu': [1.018, 1.283, 1.952, 2.692, 0.903],
+    'space': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0.045],
+    'tamil.n': [1, 1.118, 1.766, 2.34, 2.809, 3.202, 3.812, 4.141, 4.297, 4.957, 4.936, 5.445, 6.102, 6.21, 7.616, 0.43],
+    'tamil.p': [1, 2.24, 2.041, 3.673, 3.535, 3.831, 5.215, 0.688],
+    'tamil.s': [1, 1.212, 1.463, 1.721, 1.958, 2.282, 2.61, 3.113, 3.291, 3.815, 4.101, 4.457, 4.753, 4.888, 5.203, 0.324],
+    'thai.n': [1, 1, 1.484, 1.937, 2.81, 2.057, 2.796, 3.655, 4.33, 4.707, 4.281, 3.643, 6.077, 6.195, 0.421],
+    'thai.p': [1.012, 0.436],
+    'thai.s': [1, 1.075, 1.304, 1.564, 2.678, 2.783, 2.935, 4.171, 4.372, 4.486, 4.575, 5.304, 5.885, 5.613, 6.383, 0.43],
+  },
+  languages: { ar: [0.995, 1, 0.922], de: [0.993, 1.037, 1.042], en: [0.997, 0.986, 0.962], es: [0.995, 1.025, 1.047], fa: [1.002, 1.001, 1.134], fr: [1.13, 1.005, 0.882], hi: [0.975, 0.891, 0.916], id: [1.006, 1.189, 1.622], it: [0.999, 1.275, 1.616], ja: [1.023, 1.005, 0.987], latin: [0.984, 1.047, 1.02], mr: [1.106, 1.149, 1.049], nl: [0.997, 1.128, 1.424], pl: [0.986, 1.397, 1.439], pt: [0.99, 0.997, 0.965], ru: [0.984, 0.872, 0.859], tr: [1.037, 1.202, 1.041], uk: [1.021, 1.155, 1.187], vi: [0.872, 0.81, 1.295], zh: [0.989, 1.024, 1.048] },
+  perCharacter: 0.395,
+};
+// END GENERATED O200K_TABLE
+
+function splitO200kPieces(text) {
+  return Array.from(String(text ?? '').matchAll(O200K_PIECE_PATTERN), (match) => match[0]);
+}
+
+// A piece's family and length. Letter pieces count letters (marks included), digit pieces
+// count as one, whitespace counts characters, and punctuation counts the characters after
+// an optional leading space, without trailing line breaks.
+function o200kPieceFamily(piece) {
+  const letters = piece.match(O200K_LETTERS);
+  if (letters) {
+    const first = letters[0];
+    const script = O200K_SCRIPTS.find(([, pattern]) => pattern.test(first))?.[0] ?? 'other';
+    const lead = piece[0] === ' ' ? 's' : O200K_LETTER.test(piece[0]) ? 'n' : 'p';
+    if (script !== 'latin') return { family: `${script}.${lead}`, length: letters.length, letters: true };
+    const upper = letters.filter((letter) => O200K_UPPER.test(letter)).length;
+    const letterCase = upper === letters.length && letters.length > 1 ? 'U' : O200K_UPPER.test(first) ? 'C' : 'l';
+    const accented = letters.some((letter) => !O200K_ASCII_LETTER.test(letter)) ? 'd' : '';
+    return { family: `latin.${lead}${letterCase}${accented}`, length: letters.length, letters: true };
+  }
+  // One to three ASCII digits are always one token; other digits (Devanagari, Arabic-Indic,
+  // superscripts) are measured.
+  if (O200K_DIGIT.test(piece)) return { family: /^[0-9]+$/.test(piece) ? 'digits' : 'digits.u', length: 1, letters: false };
+  if (!piece.trim()) return { family: /[\r\n]/.test(piece) ? 'newline' : 'space', length: piece.length, letters: false };
+  const body = piece[0] === ' ' ? piece.slice(1) : piece;
+  const length = Math.max(1, Array.from(body.replace(/[\r\n]+$/, '')).length);
+  return { family: `punct${piece[0] === ' ' ? '.s' : ''}${O200K_NON_ASCII.test(body) ? 'u' : ''}`, length, letters: false };
+}
+
+function o200kHints() {
+  if (o200kHintWords) return o200kHintWords;
+  o200kHintWords = new Map();
+  for (const [language, words] of Object.entries(O200K_LANGUAGE_HINTS)) {
+    for (const word of words.split(' ')) o200kHintWords.set(word, [...(o200kHintWords.get(word) ?? []), language]);
+  }
+  return o200kHintWords;
+}
+
+// The language a paragraph's pieces clearly lead with, or '' when none does. Japanese and
+// Chinese run whole sentences together as one piece, so they are told by their letters:
+// kana for Japanese, Han without kana for Chinese. A paragraph with accented Latin letters
+// and no English hint words, but no clear language either, is `latin`: some other
+// Latin-script language, which splits into more tokens than English does.
+function o200kSegmentLanguage(pieces) {
+  const hints = o200kHints();
+  const scores = new Map();
+  let letters = 0;
+  let kana = 0;
+  let han = 0;
+  let accented = 0;
+  for (const piece of pieces) {
+    letters += piece.match(O200K_LETTERS)?.length ?? 0;
+    kana += piece.match(O200K_KANA_LETTERS)?.length ?? 0;
+    han += piece.match(O200K_HAN_LETTERS)?.length ?? 0;
+    accented += piece.match(O200K_ACCENTED_LATIN)?.length ?? 0;
+    const languages = hints.get(piece.replace(O200K_LEADING_NON_LETTERS, '').toLowerCase());
+    if (languages) for (const language of languages) scores.set(language, (scores.get(language) ?? 0) + 1 / languages.length);
+  }
+  if (kana >= 2 && kana >= 0.1 * letters) return 'ja';
+  if (han >= 2 && han >= 0.3 * letters) return 'zh';
+  const [best, second] = [...scores.entries()].sort((a, b) => b[1] - a[1]);
+  if (best && best[1] >= 2 && (!second || best[1] >= 1.5 * second[1])) return best[0];
+  if (!scores.has('en') && accented >= 3 && accented >= 0.02 * letters) return 'latin';
+  return '';
+}
+
+// Word pieces of 1–3, 4–7 and 8 or more letters get their own language factor.
+function o200kLengthBand(length) {
+  return length <= 3 ? 0 : length <= 7 ? 1 : 2;
+}
+
+// Code splits differently from prose (`.map(`, ` = `, indentation), so a paragraph where
+// brackets, semicolons and `=` are common next to its words uses the table's code families.
+function o200kLooksLikeCode(entries) {
+  let marks = 0;
+  let words = 0;
+  for (const entry of entries) {
+    if (entry.letters) words += 1;
+    else if (entry.family.startsWith('punct') && O200K_CODE_MARK.test(entry.piece)) marks += 1;
+  }
+  return marks >= 3 && marks >= 0.25 * words;
+}
+
+// The text split into paragraphs at blank lines. Each paragraph lists its pieces with their
+// family and length, and says whether it reads as code or as one clear language.
+function o200kSegments(text) {
+  const paragraphs = [];
+  let current = [];
+  for (const match of String(text ?? '').matchAll(O200K_PIECE_PATTERN)) {
+    const piece = match[0];
+    current.push({ piece, ...o200kPieceFamily(piece) });
+    if (O200K_BLANK_LINE.test(piece)) {
+      paragraphs.push(current);
+      current = [];
+    }
+  }
+  if (current.length > 0) paragraphs.push(current);
+  return paragraphs.map((entries) => {
+    if (o200kLooksLikeCode(entries)) {
+      for (const entry of entries) entry.family = `code.${entry.family}`;
+      return { entries, code: true, language: '' };
+    }
+    return { entries, code: false, language: o200kSegmentLanguage(entries.filter((entry) => entry.letters).map((entry) => entry.piece)) };
+  });
+}
+
+// A family's row lists the average for each length that was seen often enough, then its
+// tokens per character, which also covers longer and rarer lengths. A code family missing
+// from the table falls back to the prose family, and an unknown family to a general rate.
+function o200kPieceEstimate(entry, table = O200K_TABLE) {
+  const values = table.families[entry.family] ?? table.families[entry.family.replace(/^code\./, '')];
+  if (!values) return Math.max(1, entry.length * table.perCharacter);
+  const rate = values[values.length - 1];
+  if (entry.length < values.length) return values[entry.length - 1];
+  return entry.length >= O200K_LENGTH_CAP ? rate * entry.length : Math.max(1, rate * entry.length);
+}
+
+// Estimated o200k_base token count of `text`, rounded to a whole number.
+function estimateTextTokens(text, table = O200K_TABLE) {
+  let total = 0;
+  for (const segment of o200kSegments(text)) {
+    const factors = table.languages[segment.language];
+    for (const entry of segment.entries) {
+      const estimate = o200kPieceEstimate(entry, table);
+      total += factors && entry.letters ? estimate * factors[o200kLengthBand(entry.length)] : estimate;
+    }
+  }
+  return Math.round(total);
 }
 
 (() => {
@@ -4249,6 +4562,8 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
         : conversation.messages;
       const statsBase = conversation.stats;
       const exportStats = deriveExportStats(statsMessages, statsBase, { model: conversation.model });
+      // ChatGPT only: the estimate follows ChatGPT's tokenizer, and Claude's differs.
+      if (provider === 'ChatGPT') exportStats.estimatedTokens = estimateTextTokens(exportStatsText(statsMessages));
       const exportableConversation = { ...conversation, stats: exportStats };
       const exportedAt = new Date().toISOString();
       const html = renderConversationHtml(exportableConversation, {
@@ -4264,7 +4579,9 @@ function deriveExportStats(messages, baseStats = {}, { model = null } = {}) {
       const imageSummary = Number.isFinite(exportStats.imageCount) && exportStats.imageCount > 0
         ? ` ${exportStats.imageEmbeddedCount} image(s) embedded; ${exportStats.imageUnavailableCount} unavailable${exportStats.imageBudgetLimitedCount ? `; ${exportStats.imageBudgetLimitedCount} limited by export budget` : ''}.`
         : '';
-      const localStats = `${exportStats.wordCount.toLocaleString('en-US')} words and ${exportStats.characterCount.toLocaleString('en-US')} characters counted locally.`;
+      const localStats = Number.isFinite(exportStats.estimatedTokens)
+        ? `${exportStats.wordCount.toLocaleString('en-US')} words, ${exportStats.characterCount.toLocaleString('en-US')} characters and about ${formatTokenEstimate(exportStats.estimatedTokens)} tokens counted locally.`
+        : `${exportStats.wordCount.toLocaleString('en-US')} words and ${exportStats.characterCount.toLocaleString('en-US')} characters counted locally.`;
       const settingsLine = settingsNote ? `\n${settingsNote} Change them with ${MENU_LABEL}` : '';
       showStatus('Download ready', `${exportStats.messageCount} ${provider} message(s) exported; ${exportStats.omittedBlockCount} unsupported block(s) marked.${imageSummary} ${localStats}${settingsLine}`);
     } catch (error) {

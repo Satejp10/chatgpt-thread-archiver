@@ -1,0 +1,125 @@
+{
+  "description": "Original sample texts with exact o200k_base token counts from gpt-tokenizer 4.1.0, for the local token estimate regression test. Not used to fit the estimate.",
+  "samples": [
+    {
+      "name": "English reply with Markdown",
+      "group": "english",
+      "o200k": 122,
+      "text": "## Quick answer\n\nYes. You can export a chat as a single HTML file and open it offline later.\n\n**How it works:**\n- The exporter reads the chat that is open in your browser.\n- It builds one file with every message, image and code block.\n- Nothing is sent anywhere else, so your chat stays private.\n\nIf the file looks too large, choose **Choose images** and leave out the screenshots you don't need. Most chats come out between 200 KB and 2 MB.\n\n> Tip: the **Dark mode** button in the corner remembers your choice for the next export."
+    },
+    {
+      "name": "English prompt, casual",
+      "group": "english",
+      "o200k": 64,
+      "text": "hey can u help me plan a 3 day trip to lisbon in march? im on a budget, maybe 600 euros total not counting flights. i like food markets, old neighborhoods and a bit of nightlife but nothing crazy. also is it worth doing sintra as a day trip or is that too touristy"
+    },
+    {
+      "name": "English explanation",
+      "group": "english",
+      "o200k": 99,
+      "text": "Photosynthesis turns light into chemical energy. Inside the chloroplasts, chlorophyll absorbs mostly red and blue light, and that energy splits water molecules. The oxygen we breathe is released as a by-product, while the hydrogen and the captured energy are used to build sugars from carbon dioxide. Those sugars feed the plant and, through food chains, nearly every other living thing on Earth. The process is surprisingly inefficient: a typical crop field stores only one or two percent of the sunlight that reaches it."
+    },
+    {
+      "name": "Python code",
+      "group": "code",
+      "o200k": 129,
+      "text": "```python\nimport csv\nfrom collections import Counter\n\ndef top_words(path, limit=10):\n    \"\"\"Return the most common words in the first column of a CSV file.\"\"\"\n    counts = Counter()\n    with open(path, newline='', encoding='utf-8') as handle:\n        for row in csv.reader(handle):\n            if not row:\n                continue\n            counts.update(word.lower() for word in row[0].split())\n    return counts.most_common(limit)\n\nif __name__ == '__main__':\n    for word, count in top_words('notes.csv'):\n        print(f'{word:>12} {count}')\n```"
+    },
+    {
+      "name": "JavaScript and JSON",
+      "group": "code",
+      "o200k": 137,
+      "text": "```js\nexport async function loadSettings(url) {\n  const response = await fetch(url, { headers: { Accept: 'application/json' } });\n  if (!response.ok) throw new Error(`Settings request failed: ${response.status}`);\n  const settings = await response.json();\n  return { theme: settings.theme ?? 'light', pageSize: Number(settings.pageSize) || 25 };\n}\n```\n\n```json\n{\n  \"theme\": \"dark\",\n  \"pageSize\": 50,\n  \"languages\": [\"en\", \"es\", \"hi\"],\n  \"lastOpened\": \"2026-11-07T09:30:00Z\"\n}\n```"
+    },
+    {
+      "name": "Shell commands",
+      "group": "code",
+      "o200k": 45,
+      "text": "```bash\ngit fetch origin main\ngit switch -c feature/token-estimate origin/main\nnpm run build && npm run check\ncmp -s dist/app.user.js app.user.js || echo 'artifacts differ'\n```"
+    },
+    {
+      "name": "Markdown table with numbers",
+      "group": "english",
+      "o200k": 87,
+      "text": "| Month | Visitors | Change |\n|---|---:|---:|\n| January | 12,480 | +4.2% |\n| February | 11,905 | -4.6% |\n| March | 15,312 | +28.6% |\n| April | 14,870 | -2.9% |\n\nMarch was the busiest month by far, mostly because of the spring sale."
+    },
+    {
+      "name": "Emoji chat message",
+      "group": "english",
+      "o200k": 35,
+      "text": "lol that's perfect 😂😂 thanks!! 🙏 ok last thing, can you make the intro shorter? like 2 sentences max 👍 and maybe add a 🎉 at the end"
+    },
+    {
+      "name": "Spanish",
+      "group": "other",
+      "o200k": 113,
+      "text": "La fotosíntesis convierte la luz en energía química. Dentro de los cloroplastos, la clorofila absorbe sobre todo la luz roja y azul, y esa energía rompe las moléculas de agua. El oxígeno que respiramos se libera como subproducto, mientras que el hidrógeno y la energía capturada se usan para fabricar azúcares a partir del dióxido de carbono. Esos azúcares alimentan a la planta y, a través de las cadenas alimentarias, a casi todos los demás seres vivos."
+    },
+    {
+      "name": "French",
+      "group": "other",
+      "o200k": 112,
+      "text": "La photosynthèse transforme la lumière en énergie chimique. Dans les chloroplastes, la chlorophylle absorbe surtout la lumière rouge et bleue, et cette énergie sert à casser les molécules d'eau. L'oxygène que nous respirons est libéré comme sous-produit, tandis que l'hydrogène et l'énergie captée servent à fabriquer des sucres à partir du dioxyde de carbone. Ces sucres nourrissent la plante et, par les chaînes alimentaires, presque tous les autres êtres vivants."
+    },
+    {
+      "name": "German",
+      "group": "other",
+      "o200k": 103,
+      "text": "Die Photosynthese wandelt Licht in chemische Energie um. In den Chloroplasten nimmt das Chlorophyll vor allem rotes und blaues Licht auf, und diese Energie spaltet Wassermoleküle. Der Sauerstoff, den wir atmen, wird dabei als Nebenprodukt freigesetzt, während der Wasserstoff und die gewonnene Energie genutzt werden, um aus Kohlendioxid Zucker aufzubauen. Dieser Zucker ernährt die Pflanze und über die Nahrungsketten fast alle anderen Lebewesen."
+    },
+    {
+      "name": "Italian",
+      "group": "other",
+      "o200k": 125,
+      "text": "La fotosintesi trasforma la luce in energia chimica. All'interno dei cloroplasti, la clorofilla assorbe soprattutto la luce rossa e blu, e questa energia scinde le molecole d'acqua. L'ossigeno che respiriamo viene liberato come sottoprodotto, mentre l'idrogeno e l'energia catturata servono a costruire zuccheri a partire dall'anidride carbonica. Questi zuccheri nutrono la pianta e, attraverso le catene alimentari, quasi tutti gli altri esseri viventi."
+    },
+    {
+      "name": "Portuguese",
+      "group": "other",
+      "o200k": 109,
+      "text": "A fotossíntese transforma a luz em energia química. Dentro dos cloroplastos, a clorofila absorve sobretudo a luz vermelha e azul, e essa energia quebra as moléculas de água. O oxigênio que respiramos é liberado como subproduto, enquanto o hidrogênio e a energia captada são usados para produzir açúcares a partir do dióxido de carbono. Esses açúcares alimentam a planta e, pelas cadeias alimentares, quase todos os outros seres vivos."
+    },
+    {
+      "name": "Hindi",
+      "group": "other",
+      "o200k": 128,
+      "text": "प्रकाश संश्लेषण प्रकाश को रासायनिक ऊर्जा में बदल देता है। क्लोरोप्लास्ट के अंदर क्लोरोफिल मुख्य रूप से लाल और नीली रोशनी को सोखता है, और यह ऊर्जा पानी के अणुओं को तोड़ देती है। हम जो ऑक्सीजन लेते हैं वह इसी प्रक्रिया में बाहर निकलती है, जबकि हाइड्रोजन और पकड़ी गई ऊर्जा से कार्बन डाइऑक्साइड से शर्करा बनाई जाती है। यही शर्करा पौधे का भोजन है और खाद्य श्रृंखला के ज़रिए लगभग सभी जीवों का भी।"
+    },
+    {
+      "name": "Marathi",
+      "group": "other",
+      "o200k": 143,
+      "text": "प्रकाशसंश्लेषण प्रकाशाचे रूपांतर रासायनिक ऊर्जेत करते. हरितलवकांमध्ये हरितद्रव्य मुख्यतः लाल आणि निळा प्रकाश शोषून घेते आणि त्या ऊर्जेमुळे पाण्याचे रेणू तुटतात. आपण घेत असलेला ऑक्सिजन या प्रक्रियेत बाहेर पडतो, तर हायड्रोजन आणि मिळालेली ऊर्जा कार्बन डायऑक्साइडपासून साखर तयार करण्यासाठी वापरली जाते. ही साखर वनस्पतीचे अन्न आहे आणि अन्नसाखळीद्वारे जवळजवळ सर्व सजीवांचेही."
+    },
+    {
+      "name": "Russian",
+      "group": "other",
+      "o200k": 110,
+      "text": "Фотосинтез превращает свет в химическую энергию. Внутри хлоропластов хлорофилл поглощает в основном красный и синий свет, и эта энергия расщепляет молекулы воды. Кислород, которым мы дышим, выделяется как побочный продукт, а водород и полученная энергия идут на построение сахаров из углекислого газа. Эти сахара питают растение и через пищевые цепи почти все остальные живые существа."
+    },
+    {
+      "name": "Arabic",
+      "group": "other",
+      "o200k": 122,
+      "text": "يحوّل التمثيل الضوئي الضوء إلى طاقة كيميائية. داخل البلاستيدات الخضراء يمتص الكلوروفيل الضوء الأحمر والأزرق بشكل رئيسي، وتقوم هذه الطاقة بتفكيك جزيئات الماء. ويُطلق الأكسجين الذي نتنفسه كناتج ثانوي، بينما يُستخدم الهيدروجين والطاقة الملتقطة لبناء السكريات من ثاني أكسيد الكربون. وتغذي هذه السكريات النبات، ومن خلال السلاسل الغذائية تغذي تقريبًا جميع الكائنات الحية الأخرى."
+    },
+    {
+      "name": "Chinese",
+      "group": "other",
+      "o200k": 99,
+      "text": "光合作用把光能转化为化学能。在叶绿体中，叶绿素主要吸收红光和蓝光，这些能量把水分子分解。我们呼吸的氧气作为副产品被释放出来，而氢和捕获的能量被用来把二氧化碳合成糖。这些糖为植物提供养分，并通过食物链养活了地球上几乎所有其他生物。"
+    },
+    {
+      "name": "Japanese",
+      "group": "other",
+      "o200k": 139,
+      "text": "光合成は光を化学エネルギーに変える仕組みです。葉緑体の中で、クロロフィルは主に赤と青の光を吸収し、そのエネルギーで水の分子を分解します。私たちが吸う酸素は副産物として放出され、水素と取り込んだエネルギーは二酸化炭素から糖を作るために使われます。この糖が植物の栄養となり、食物連鎖を通じてほとんどすべての生き物を支えています。"
+    },
+    {
+      "name": "Korean",
+      "group": "other",
+      "o200k": 117,
+      "text": "광합성은 빛을 화학 에너지로 바꾸는 과정입니다. 엽록체 안에서 엽록소는 주로 빨간빛과 파란빛을 흡수하고, 그 에너지로 물 분자를 분해합니다. 우리가 숨 쉬는 산소는 부산물로 방출되고, 수소와 얻은 에너지는 이산화탄소로부터 당을 만드는 데 쓰입니다. 이 당은 식물의 양분이 되고, 먹이 사슬을 통해 거의 모든 생물을 먹여 살립니다."
+    }
+  ]
+}

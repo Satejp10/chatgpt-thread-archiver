@@ -1,4 +1,4 @@
-const ARCHIVER_VERSION = '0.17.0';
+const ARCHIVER_VERSION = '0.18.0';
 const ROLE_LABELS = {
   user: 'You',
   assistant: 'ChatGPT',
@@ -720,12 +720,24 @@ function roleCounts(messages, provider = 'ChatGPT') {
   return [...counts.entries()].map(([role, count]) => `${count} ${role === 'assistant' ? provider : (ROLE_LABELS[role] ?? role)}`).join(', ');
 }
 
+// The token estimate is rounded to three significant figures (exact below 1,000): its
+// last digits would claim more precision than an estimate has.
+export function formatTokenEstimate(count) {
+  const value = Math.max(0, Math.round(Number(count) || 0));
+  if (value < 1000) return value.toLocaleString('en-US');
+  const step = 10 ** (String(value).length - 3);
+  return (Math.round(value / step) * step).toLocaleString('en-US');
+}
+
+const TOKEN_ESTIMATE_NOTE = 'Estimated in your browser for the tokenizer ChatGPT models have used since GPT-4o. It counts the exported text only: hidden reasoning, system instructions and uploaded files are not included.';
+
 function formatLocalStats(stats) {
   if (!Number.isFinite(stats?.wordCount) || !Number.isFinite(stats?.characterCount)) return '';
   const words = Number(stats.wordCount).toLocaleString('en-US');
   const characters = Number(stats.characterCount).toLocaleString('en-US');
   const blocks = Number.isFinite(stats.textBlockCount) ? ` · ${Number(stats.textBlockCount).toLocaleString('en-US')} text blocks` : '';
-  return `<p class="meta">Safe local stats: ${words} words · ${characters} characters${blocks}. Counted from exported text only; provider token and context-window usage are not included.</p>`;
+  const tokens = Number.isFinite(stats.estimatedTokens) ? ` · <span title="${escapeAttribute(TOKEN_ESTIMATE_NOTE)}">about ${formatTokenEstimate(stats.estimatedTokens)} tokens (local estimate)</span>` : '';
+  return `<p class="meta">Safe local stats: ${words} words · ${characters} characters${blocks}${tokens}. Counted from exported text only; provider token and context-window usage are not included.</p>`;
 }
 
 function safeModelLabel(value) {

@@ -112,6 +112,11 @@ Local fixture checks and bundle syntax validation have been run, but live accept
 | Message Copy button (v0.17.0) | Click **Copy** on a reply with a code block and paste into Obsidian | The code block stays a fenced code block |
 | Token estimate, ChatGPT (v0.18.0) | Export a ChatGPT chat | The stats line in the file ends with `about N tokens (local estimate)`, and holding the pointer over it explains what is not counted; the message after the download gives the same number |
 | No token estimate, Claude (v0.18.0) | Export a Claude chat | The stats line shows words, characters and text blocks only, as before |
+| Fold a message (v0.19.0) | In any export, click a message's name, then click it again | The message folds to one line that shows the start of its text, then opens again; **Copy** on a folded message copies all of it |
+| Tool output starts folded (v0.19.0) | Export a ChatGPT chat in which code ran | Tool messages start folded; every other message starts open |
+| Context gauge, Claude (v0.19.0) | Export a Claude chat that used thinking | The top right shows `Context used` with a percentage, a bar and `≈N of 1M tokens · local estimate`; holding the pointer over it lists messages, thinking, instructions and what is not counted |
+| Context gauge, ChatGPT (v0.19.0) | Export a ChatGPT chat with the current branch only | The gauge's token figure matches the stats line's (for example `≈2.24K` and `about 2,240 tokens`) |
+| Context window choice (v0.19.0) | In the gauge, pick 200K, then close and reopen the file | The percentage is five times the 1M figure, and 200K is still picked after reopening |
 
 ## Failure report template
 

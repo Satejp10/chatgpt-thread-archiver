@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Script } from 'node:vm';
-import { copyMarkdownToHtml, formatTokenEstimate, normalizeConversation, renderConversationHtml, sanitizeFilename, textToBlocks, ConversationShapeError, selectConversationBranch, messagesFromBranchTree, discoverImageModelMetadata, extractTextBlocks } from './src/core.mjs';
+import { copyMarkdownToHtml, CONTEXT_WINDOW_SIZES, DEFAULT_CONTEXT_WINDOW, formatCompactTokens, formatContextShare, formatTokenEstimate, normalizeConversation, renderConversationHtml, sanitizeFilename, textToBlocks, ConversationShapeError, selectConversationBranch, messagesFromBranchTree, discoverImageModelMetadata, extractTextBlocks } from './src/core.mjs';
 import { ChatGPTClientError, clearAccessTokenCache, describeClientError, endpointCandidates, getAuthContext, getConversationIdFromUrl, isExporterRoute, parseConversationRoute } from './src/chatgpt-client.mjs';
 import { applyImageBudget, candidateDownloadUrl, IMAGE_LIMITS, resolveClaudeConversationImages, resolveConversationImages, retryDelayMs, summarizeImageStats } from './src/assets.mjs';
 import { deriveExportStats, exportStatsText } from './src/export-stats.mjs';
 import { estimateTextTokens, o200kPieceFamily, o200kSegmentLanguage, splitO200kPieces } from './src/token-estimate.mjs';
+import { claudeImageTokens, estimateContextUse } from './src/context-estimate.mjs';
 import { ClaudeClientError, claudeConversationPath, claudeIdFormat, claudeRequestShapes, describeClaudeError, fetchClaudeConversation, getClaudeConversationIdFromUrl, isClaudeExporterRoute, normalizeClaudeConversation, parseClaudeConversationRoute, redactClaudePath } from './src/claude-client.mjs';
 
 const load = async (name) => JSON.parse(await readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
@@ -18,6 +19,7 @@ const claudeSource = await readFile(new URL('./src/claude-client.mjs', import.me
 const buildSource = await readFile(new URL('./build.mjs', import.meta.url), 'utf8');
 const estimateSource = await readFile(new URL('./src/token-estimate.mjs', import.meta.url), 'utf8');
 const fitToolSource = await readFile(new URL('./tools/fit-token-estimate.mjs', import.meta.url), 'utf8');
+const contextSource = await readFile(new URL('./src/context-estimate.mjs', import.meta.url), 'utf8');
 
 const simple = normalizeConversation(await load('simple-conversation.json'));
 assert.equal(simple.messages.length, 2);
@@ -52,8 +54,8 @@ assert.match(simpleHtml, /id="copy-bar"/);
 assert.match(simpleHtml, /id="copy-chat"/);
 assert.match(simpleHtml, /2 messages \(1 You, 1 ChatGPT\)/);
 assert.match(simpleHtml, /Content-Security-Policy/);
-assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.18\.0"/);
-assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.18\.0/);
+assert.match(simpleHtml, /name="generator" content="chatgpt-thread-archiver 0\.19\.0"/);
+assert.match(simpleHtml, /Generated locally by chatgpt-thread-archiver 0\.19\.0/);
 assert.match(simpleHtml, /color-scheme: light/);
 assert.match(simpleHtml, /scroll-margin-top: 16px/);
 assert.match(simpleHtml, /\.content \{ overflow-wrap: anywhere; margin-top: 10px; \}/);
@@ -230,7 +232,7 @@ assert.match(embeddedImageHtml, /class="image-block"/);
 assert.match(embeddedImageHtml, /src="data:image\/png;base64,iVBORw0KGgo="/);
 assert.match(embeddedImageHtml, /Images: 1 embedded, 0 excluded, 0 unavailable/);
 assert.match(renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 1, imageUnavailableCount: 0, imageBytes: 4097 } }), /5 KB embedded/);
-assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.18\.0/);
+assert.match(embeddedImageHtml, /Generated locally by chatgpt-thread-archiver 0\.19\.0/);
 embeddedImage.asset = { ...embeddedImage.asset, status: 'unavailable', reason: 'asset expired' };
 const unavailableImageHtml = renderConversationHtml({ ...imageConversation, stats: { ...imageConversation.stats, imageCount: 1, imageEmbeddedCount: 0, imageUnavailableCount: 1 } }, { exportedAt: '2026-08-15T00:00:00.000Z' });
 assert.match(unavailableImageHtml, /\[image unavailable: asset expired\]/);
@@ -1244,7 +1246,7 @@ assert.match(statsSource, /characterCount/);
 assert.doesNotMatch(statsSource, /authorization|bearer|billing|context-window|token/i);
 assert.match(buildSource, /@name         ChatGPT Thread Archiver/);
 assert.match(buildSource, /@namespace    local\.chatgpt-thread-archiver/);
-assert.match(buildSource, /@version      0\.18\.0/);
+assert.match(buildSource, /@version      0\.19\.0/);
 // The script runs on the whole host so a chat started on the home page gets the button
 // without a reload; the route check decides where the button shows.
 assert.ok(buildSource.includes('// @match        https://chatgpt.com/*\n'));
@@ -1418,7 +1420,7 @@ assert.match(estimateSource, /\/\/ BEGIN GENERATED O200K_TABLE[\s\S]*'latin\.sl'
 assert.match(fitToolSource, /await import\('gpt-tokenizer\/encoding\/o200k_base'\)/);
 assert.doesNotMatch(buildSource, /tools\//);
 assert.match(buildSource, /source\('token-estimate\.mjs'\)/);
-assert.match(buildSource, /\$\{stats\}\n\$\{estimate\}\n\$\{ui\}/);
+assert.match(buildSource, /\$\{stats\}\n\$\{estimate\}\n\$\{context\}\n\$\{ui\}/);
 // It counts the same text as the word and character counts.
 assert.equal(deriveExportStats(simple.messages, simple.stats).characterCount, [...exportStatsText(simple.messages)].length);
 // ChatGPT exports carry it; Claude exports do not, because Claude's tokenizer differs.
@@ -1433,6 +1435,101 @@ const estimateHtml = renderConversationHtml({ ...simple, stats: { ...deriveExpor
 assert.match(estimateHtml, /<span title="[^"]*hidden reasoning, system instructions and uploaded files are not included\.">about 2,240 tokens \(local estimate\)<\/span>\. Counted from exported text only; provider token and context-window usage are not included\./);
 const noEstimateHtml = renderConversationHtml({ ...simple, stats: deriveExportStats(simple.messages, simple.stats) }, { exportedAt: '2026-11-07T00:00:00.000Z' });
 assert.doesNotMatch(noEstimateHtml, /tokens \(local estimate\)/);
+
+// v0.19.0 — Every message folds, and a context gauge sits at the top of the export.
+// A message's header is the <summary> of a <details>, so it folds like a thinking block,
+// with no script. The copy button is outside the summary: copying must not fold it.
+const foldHtml = renderConversationHtml(simple, { exportedAt: '2026-11-07T00:00:00.000Z' });
+assert.match(foldHtml, /<article class="message user message-user"[^>]*><details class="message-fold" open><summary class="message-header"><h2>You/);
+assert.match(foldHtml, /<\/summary><div class="content message-body">/);
+assert.match(foldHtml, /<\/div><\/details><button class="copy-btn" type="button"[^>]*>Copy<\/button><\/article>/);
+assert.equal((foldHtml.match(/<details class="message-fold" open>/g) ?? []).length, simple.messages.length);
+assert.match(foldHtml, /\.message-fold\[open\] \.message-peek \{ display: none; \}/);
+// The copy script still reads the speaker from the header and the text from the body.
+assert.match(foldHtml, /querySelector\('\.message-header h2'\)/);
+assert.match(foldHtml, /querySelector\('\.content'\)/);
+// Tool messages start folded, like Claude's tool blocks; a folded message shows the start
+// of its text, cut by characters so that an emoji is never split.
+const foldNode = (id, role, text, parent, child) => ({ id, parent, children: child ? [child] : [], message: { id, author: { role }, content: { content_type: 'text', parts: [text] } } });
+const foldToolChat = normalizeConversation({ title: 'Tool chat', current_node: 'a1', mapping: {
+  u1: foldNode('u1', 'user', `Check the fonts ${'a'.repeat(122)}😀😀 and more text after it`, null, 't1'),
+  t1: foldNode('t1', 'tool', '/usr/share/fonts/lato/Lato-Medium.ttf: Lato\n/usr/share/fonts/noto/NotoSans.ttf: Noto Sans', 'u1', 'a1'),
+  a1: foldNode('a1', 'assistant', 'Lato and Noto Sans are installed.', 't1', null),
+} });
+const foldToolHtml = renderConversationHtml(foldToolChat, { exportedAt: '2026-11-07T00:00:00.000Z' });
+assert.match(foldToolHtml, /<article class="message tool message-tool"[^>]*><details class="message-fold"><summary class="message-header">/);
+assert.match(foldToolHtml, /<span class="message-peek">\/usr\/share\/fonts\/lato\/Lato-Medium\.ttf: Lato \/usr\/share\/fonts\/noto\/NotoSans\.ttf: Noto Sans<\/span><\/summary>/);
+const longPeek = foldToolHtml.match(/message-user"[^>]*><details[^>]*><summary[^>]*>[\s\S]*?<span class="message-peek">([^<]*)<\/span>/)?.[1] ?? '';
+assert.equal(Array.from(longPeek).length, 140);
+assert.ok(longPeek.endsWith('😀…'), longPeek);
+assert.doesNotMatch(longPeek, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+// j and k move between prompts, but not while the window picker has focus.
+assert.match(coreSource, /t\.tagName === "SELECT"/);
+
+// The estimate is local: no request, storage or provider data of any kind.
+assert.doesNotMatch(contextSource, /fetch\(|XMLHttpRequest|sendBeacon|WebSocket|localStorage|sessionStorage|https?:\/\//);
+assert.match(buildSource, /source\('context-estimate\.mjs'\)/);
+assert.match(uiSource, /exportStats\.context = estimateContextUse\(normalized\.messages, \{ provider, countTokens: estimateTextTokens \}\);/);
+// ChatGPT: the messages' text, the same figure as the stats line's.
+const chatgptContext = estimateContextUse(simple.messages, { provider: 'ChatGPT', countTokens: estimateTextTokens });
+assert.deepEqual(chatgptContext, { provider: 'ChatGPT', total: estimateTextTokens(exportStatsText(simple.messages)), messages: estimateTextTokens(exportStatsText(simple.messages)) });
+assert.equal(estimateContextUse([], { provider: 'ChatGPT', countTokens: estimateTextTokens }).total, 0);
+assert.equal(estimateContextUse(null).total, 0);
+// Claude: text and tool calls × 1.4, 100 tokens a second of thinking, 8,700 for Claude's
+// published instructions, and images by Anthropic's formula.
+const claudeContext = estimateContextUse(claudeReasoning.messages, { provider: 'Claude', countTokens: estimateTextTokens });
+const claudeText = estimateTextTokens(exportStatsText(claudeReasoning.messages));
+assert.equal(claudeContext.messages, Math.round(claudeText * 1.4));
+assert.equal(claudeContext.thinkingSeconds, 56);
+assert.equal(claudeContext.thinking, 5600);
+assert.equal(claudeContext.thinkingSteps, 1);
+assert.equal(claudeContext.instructions, 8700);
+assert.ok(claudeContext.tools > 0);
+assert.equal(claudeContext.total, claudeContext.messages + claudeContext.tools + claudeContext.thinking + claudeContext.instructions + claudeContext.images);
+const claudeImageContext = estimateContextUse(claudeImages.messages, { provider: 'Claude', countTokens: estimateTextTokens });
+assert.equal(claudeImageContext.imageCount, 1);
+assert.equal(claudeImageContext.images, claudeImageTokens(1162, 616));
+// A thinking step without times is reported, not guessed.
+assert.equal(claudeImageContext.untimedThinkingSteps, 1);
+assert.equal(claudeImageContext.thinking, 0);
+assert.equal(claudeImageTokens(1400, 866), 1550);
+assert.equal(claudeImageTokens(28, 28), 1);
+assert.equal(claudeImageTokens(29, 28), 2);
+// The long edge is scaled to 2,576 pixels, and no image counts for more than 4,784.
+assert.equal(claudeImageTokens(2576, 1456), 4784);
+assert.equal(claudeImageTokens(4000, 3000), 4784);
+assert.equal(claudeImageTokens(0, 600), null);
+assert.equal(claudeImageTokens(undefined, 600), null);
+
+assert.deepEqual(CONTEXT_WINDOW_SIZES, [32000, 128000, 200000, 256000, 400000, 500000, 1000000]);
+assert.equal(DEFAULT_CONTEXT_WINDOW, 1000000);
+assert.deepEqual([0, 999, 2237, 22345, 223456, 999600, 1000000, 1234567, 32000].map(formatCompactTokens), ['0', '999', '2.24K', '22.3K', '223K', '1M', '1M', '1.23M', '32K']);
+assert.deepEqual([[0, 1e6], [500, 1e6], [1000, 1e6], [14365, 1e6], [99400, 1e6], [99600, 1e6], [1.2e6, 1e6], [10, 0]].map(([tokens, size]) => formatContextShare(tokens, size)), ['0%', '<0.1%', '0.1%', '1.4%', '9.9%', '10%', '120%', '0%']);
+// The file is written for a 1M window, so it reads right with scripts off; the select is
+// shown only with scripts on, and the page script redraws the share for the size picked.
+const gaugeHtml = renderConversationHtml({ ...claudeReasoning, stats: { ...claudeReasoning.stats, context: claudeContext } }, { exportedAt: '2026-11-07T00:00:00.000Z' });
+assert.match(gaugeHtml, /<div class="export-title"><h1>[^<]*<\/h1><div class="context-gauge" id="context-gauge" data-context-tokens="14365" title="/);
+assert.match(gaugeHtml, /<span class="ctx-label">Context used<\/span><span class="ctx-share" data-ctx-share>1\.4%<\/span>/);
+assert.match(gaugeHtml, /data-ctx-fill style="width: 1\.44%"/);
+assert.match(gaugeHtml, /≈14\.4K of <span class="ctx-static">1M<\/span><select class="ctx-window" aria-label="Context window size"><option value="32000">32K<\/option><option value="128000">128K<\/option><option value="200000">200K<\/option><option value="256000">256K<\/option><option value="400000">400K<\/option><option value="500000">500K<\/option><option value="1000000" selected>1M<\/option><\/select> tokens<\/span><span class="ctx-note">local estimate<\/span>/);
+assert.match(gaugeHtml, /html\.js \.ctx-window \{ display: inline-block; \}/);
+assert.match(gaugeHtml, /html\.js \.ctx-static \{ display: none; \}/);
+const gaugeTitle = gaugeHtml.match(/id="context-gauge" data-context-tokens="\d+" title="([^"]*)"/)?.[1] ?? '';
+assert.match(gaugeTitle, /^Local estimate, not Claude’s own figure\.\nMessages: about 17 \(counted locally, × 1\.4 for Claude’s tokenizer\)\nThinking: about 5,600 \(56s at about 100 tokens a second\)\nTool calls and results: about 48\nClaude’s published instructions: about 8,700\nNot counted: tool descriptions, memory, preferences, project knowledge and attached files\./);
+assert.match(gaugeTitle, /Counted on the chat’s current branch only\.$/);
+const gaugeScript = gaugeHtml.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? '';
+assert.doesNotThrow(() => new Script(gaugeScript));
+assert.equal((gaugeHtml.match(/<script>/g) ?? []).length, 1);
+assert.match(gaugeScript, /chatgpt-thread-archiver-context-window/);
+assert.match(gaugeScript, /function formatContextShare\(tokens, windowSize\)/);
+assert.doesNotMatch(gaugeScript, /What does the research say/);
+const chatgptGauge = renderConversationHtml({ ...simple, stats: { ...simple.stats, context: chatgptContext } }, { exportedAt: '2026-11-07T00:00:00.000Z' });
+assert.match(chatgptGauge, /title="Local estimate, not ChatGPT’s own figure\.\nMessages: about \d+ \(the exported text, counted locally\)\nNot counted: ChatGPT’s system instructions, memory, hidden reasoning, images and uploaded files\.">/);
+// Near and over the window, the bar changes colour.
+const gaugeAt = (total) => renderConversationHtml({ ...simple, stats: { ...simple.stats, context: { provider: 'ChatGPT', total, messages: total } } });
+assert.match(gaugeAt(850000), /class="context-gauge ctx-high"/);
+assert.match(gaugeAt(1200000), /class="context-gauge ctx-over"[\s\S]*data-ctx-share>120%<\/span>[\s\S]*style="width: 100\.00%"/);
+assert.doesNotMatch(foldHtml, /id="context-gauge"/);
 
 assert.throws(() => normalizeConversation({ title: 'No messages' }), ConversationShapeError);
 

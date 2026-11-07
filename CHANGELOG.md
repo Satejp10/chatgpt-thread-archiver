@@ -2,6 +2,19 @@
 
 All notable changes to **ChatGPT Thread Archiver** are documented here. Exported conversation content is not redacted by these changes; privacy-related entries describe diagnostics, metadata controls, and request handling only.
 
+## [0.19.0] — 2026-11-07
+
+### Added
+
+**Fold any message.** Every message in an exported file now folds like a thinking block: click its header (the name and time) to hide or show the message. A folded message shows the start of its text in the header. ChatGPT's tool messages, such as code output, start folded; all other messages start open. **Copy** on a folded message still copies all of it.
+
+**Context gauge.** The top right of an exported file shows about how much of the model's context window the chat fills, for example `Context used 2.3%` with a bar and `≈22.6K of 1M tokens · local estimate`. The window is 1M tokens by default; pick 32K, 128K, 200K, 256K, 400K or 500K from the list instead, and the file remembers the choice in this browser. Hold the pointer over the gauge to see what it added up. Your browser works it out at export time from the chat's own data, with no request to anyone:
+
+- **ChatGPT:** the messages' text, the same count as the stats line. ChatGPT's data does not include its system instructions, memory, hidden reasoning or files, so the real figure is higher.
+- **Claude:** the messages, tool calls and tool results, counted as for ChatGPT and multiplied by 1.4 for Claude's tokenizer; thinking, at about 100 tokens for each second of thinking time; about 8,700 tokens for Claude's published instructions; and images, by Anthropic's formula. Tool descriptions, memory, preferences, project knowledge and attached files are not counted.
+
+It is a rough guide, not Claude's or ChatGPT's own number. The 1.4 comes from one third-party test on English text, the thinking speed was measured on Opus 5.5 through Anthropic's API rather than in the app, and the instructions figure leaves out the unpublished tool descriptions. The gauge counts the chat's current branch only, even when the export includes every branch.
+
 ## [0.18.0] — 2026-11-07
 
 ### Added

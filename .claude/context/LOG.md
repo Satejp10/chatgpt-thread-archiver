@@ -469,3 +469,33 @@ estimate would add up the parts: thinking time × about 100 tokens per second, a
 allowance for Claude's published instructions (about 6,200 o200k tokens for Opus 5.5 on
 2026-10-27, before tool descriptions), images by Anthropic's formula, and the counted
 text × about 1.4. It is not built.
+
+## 2026-11-07 — v0.19.0: folding messages and a context gauge
+
+**Did:** PR #42 (v0.18.0) merged into `main` as `ef354a3`; recorded it in
+`docs/version-history/v0.18.0.md` (live acceptance still pending). Restarted
+`claude/awesome-keller-x2q8fp` from `main`. Owner asked for every message to fold like a
+thinking block, and for the share of the context window to show at the top right of the
+export, 1M by default with other sizes to pick. Built v0.19.0: messages are
+`<details class="message-fold">` with the header as the summary (tool messages start
+folded, a folded message shows the start of its text); new `src/context-estimate.mjs`;
+a gauge with a window list (32K–1M) that the page remembers in `localStorage`. Checked in
+Chromium with Playwright on stand-in ChatGPT and Claude pages.
+
+**Decided:** The gauge needs a Claude figure, so it uses the method from the v0.18.0
+research: text and tool calls × 1.4, thinking seconds × 100, 8,700 for the published Opus
+5.5 instructions, images by Anthropic's formula. ChatGPT's figure is the message text
+only, since its data has nothing else to count. Both count the current branch only. The
+gauge is labelled `local estimate`, and its tooltip says it is not the provider's own
+figure and lists the parts; the handoff's rule on local counts now names this exception.
+Tool messages start folded, matching Claude's tool blocks. Rejected: a gauge for ChatGPT
+only (the owner's screenshot was a Claude export); a free-form window size (a list covers
+the sizes in use).
+
+**Learned:** A `<summary>` can hold the message's `h2`, so the copy script's
+`.message-header h2` selector kept working; a folded message's text is still in the page,
+so Copy reads all of it. The page's `j`/`k` handler needed to skip `SELECT` elements.
+
+**Open:** Live acceptance of v0.18.0 and v0.19.0 (rows in
+`docs/user-test-checklist.md`). Sonnet and Haiku thinking speeds are unmeasured, and the
+Claude factor rests on one English test.
